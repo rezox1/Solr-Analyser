@@ -1,23 +1,3 @@
-async function getFormsList(){
-
-}
-
-async function getVisesList(){
-
-}
-
-async function getUMLSchema(){
-
-}
-
-function getEntitiesListFromForm(){
-
-}
-
-function getEntitiesListFromVis(){
-
-}
-
 //import log4j subsystem
 const logger = require("./core/logger.js");
 
@@ -27,6 +7,17 @@ const app = express();
 
 const axios = require('axios');
 const config = require("config");
+const {DigitApp} = require("digitjs");
+
+const digitAppUrl = config.get("digit.url"),
+    digitUsername = config.get("digit.username"),
+    digitPassword = config.get("digit.password");
+
+const digitApp = new DigitApp({
+    "appUrl": digitAppUrl,
+    "username": digitUsername,
+    "password": digitPassword
+});
 
 app.use(express.json()) // for parsing application/json
 app.use(express.urlencoded({ extended: true })) // for parsing application/x-www-form-urlencoded
@@ -38,14 +29,29 @@ app.listen(port);
 logger.info(`WebModule enabled on port: ${port}`);
 
 app.get("/", async (req, res) => {
-    res.sendStatus(200);
+    try {
+        res.sendStatus(200);
+    } catch (err) {
+        res.sendStatus(400);
+
+        console.error(err);
+    }
 });
 
 app.get("/start", async (req, res) => {
+    try {
+        const forms = await digitApp.getForms();
+        const vises = await digitApp.getVises();
+        res.send(vises[0]);
+        
+        /*
+        res.send({
+            code: 'OK'
+        });
+        */
+    } catch (err) {
+        res.sendStatus(400);
 
-
-
-	res.send({
-        code: 'OK'
-    });
+        console.error(err);
+    }
 });
