@@ -5,6 +5,7 @@
   "main": "index.js",
   "dependencies": {
     "axios": "^0.19.2",
+    "btoa": "^1.2.1",
     "config": "^3.3.1",
     "cors": "^2.8.5",
     "digitjs": "git+https://github.com/rezox1/DigitJS.git",
