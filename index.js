@@ -10,6 +10,20 @@ const config = require("config");
 const {DigitApp} = require("digitjs");
 const btoa = require('btoa');
 
+class TotallyFrozenObject {
+    constructor(objectForFreeze) {
+        return new Proxy(Object.freeze(objectForFreeze), {
+            get (target, property) {
+                if (property in target) {
+                    return target[property];
+                } else {
+                    throw new ReferenceError(property + " is not defined");
+                }
+            }
+        });
+    }
+}
+
 const digitAppUrl = config.get("digit.url"),
     digitUsername = config.get("digit.username"),
     digitPassword = config.get("digit.password");
@@ -114,14 +128,32 @@ app.get("/", async (req, res) => {
 });
 
 app.get("/checkAll", async (req, res) => {
-    function processFormLink(){
-        
+    async function processElement(element, entitiesMap, linksMap){
+        const elementType = element.objectType;
+        if (elementType === FORM_ELEMENT_TYPES.LINK || elementType === FORM_ELEMENT_TYPES.TABLE) {
+            await processFormLink(element, entitiesMap, linksMap);
+        } else if (elementType === FORM_ELEMENT_TYPES.FIELD_GROUP) {
+            await processFieldGroup(element, entitiesMap, linksMap);
+        }
     }
-    function fieldGroup(){
-
+    async function processFormLink(element, entitiesMap, linksMap){
+        if (element.properties && element.properties.dataBind) {
+            const entityId = linksMap.get(element.properties.dataBind);
+            if (entityId) {
+                await processEntityById(entityId, entitiesMap);
+            }
+        }
     }
-    async function processEntityById(entityId, EntitiesMap){
-        const entityData = EntitiesMap.get(entityId);
+    async function processFieldGroup(element, entitiesMap, linksMap){
+        let fieldGroupElements = element.properties.elements;
+        if (fieldGroupElements) {
+            for (let key in fieldGroupElements) {
+                await processElement(fieldGroupElements[key], entitiesMap, linksMap);
+            }
+        }
+    }
+    async function processEntityById(entityId, entitiesMap){
+        const entityData = entitiesMap.get(entityId);
         if (!entityData.checked) {
             let [solrCount, orientCount] = await Promise.all([
                 solrApp.getDocsCount(entityId),
@@ -136,8 +168,21 @@ app.get("/checkAll", async (req, res) => {
             entityData.checked = true;
         }
     }
+    //типы элементов на форме
+    const FORM_ELEMENT_TYPES = new TotallyFrozenObject({
+        //группа полей
+        "FIELD_GROUP": "FormFieldset",
+        //ссылка
+        "LINK": "FormLink",
+        //таблица
+        "TABLE": "FormGrid"
+    });
 
     try {
+        res.send({
+            code: 'OK'
+        });
+
         const {packages,entities} = await digitApp.getUMLSchema();
         logger.info("Total entities count is " + entities.length);
         
@@ -175,27 +220,30 @@ app.get("/checkAll", async (req, res) => {
                 throw new Error("There is entity without objectId");
             }
         }
+        logger.info("Finished UML schema processing");
 
-        /*
         const forms = await digitApp.getForms();
         logger.info("Total forms count is " + forms.length);
+        
+        let i = 0;
+        for (let form of forms) {
+            let {elements} = await digitApp.getFormData(form.objectId);
+            for (let element of elements) {
+                await processElement(element, EntitiesMap, LinksMap);
+            }
+            i++;
+            if (i % 100 === 0) {
+                logger.info(i + " forms processed");
+            }
+            if (i === 5000) {
+                break;
+            }
+        }
 
+        /*
         const vises = await digitApp.getVises();
         logger.info("Total vises count is " + vises.length);
         */
-        /*
-        
-
-        */
-
-        await processEntityById("0a892aff-068f-312c-d780-3535182b2421", EntitiesMap);
-        await processEntityById("8ebed96a-eef6-01d4-bff5-af57c67cc9df", EntitiesMap);
-        await processEntityById("e666d3ed-3ce3-fab3-33b3-b3fc3b3dd3a3", EntitiesMap);
-        await processEntityById("a996243d-6ede-615c-1c08-5639aa347210", EntitiesMap);
-        await processEntityById("fa248ac2-f02d-a782-c7ef-70c716839d51", EntitiesMap);
-        await processEntityById("3d3b767d-288e-619d-ea9e-1ebe6a30c915", EntitiesMap);
-        
-
 
         const resultEntitiesObject = {}
 
@@ -208,14 +256,7 @@ app.get("/checkAll", async (req, res) => {
             }
         }
 
-        res.send(resultEntitiesObject);
-        
-        /*
-        res.send({
-            code: 'OK'
-        });
-        */
-
+        logger.info(resultEntitiesObject);
         logger.info("Operation completed");
     } catch (err) {
         res.sendStatus(400);
