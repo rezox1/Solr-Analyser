@@ -10,20 +10,6 @@ const config = require("config");
 const {DigitApp} = require("digitjs");
 const btoa = require('btoa');
 
-class TotallyFrozenObject {
-    constructor(objectForFreeze) {
-        return new Proxy(Object.freeze(objectForFreeze), {
-            get (target, property) {
-                if (property in target) {
-                    return target[property];
-                } else {
-                    throw new ReferenceError(property + " is not defined");
-                }
-            }
-        });
-    }
-}
-
 const digitAppUrl = config.get("digit.url"),
     digitUsername = config.get("digit.username"),
     digitPassword = config.get("digit.password");
@@ -169,14 +155,7 @@ app.get("/checkAll", async (req, res) => {
         }
     }
     //типы элементов на форме
-    const FORM_ELEMENT_TYPES = new TotallyFrozenObject({
-        //группа полей
-        "FIELD_GROUP": "FormFieldset",
-        //ссылка
-        "LINK": "FormLink",
-        //таблица
-        "TABLE": "FormGrid"
-    });
+    const FORM_ELEMENT_TYPES = digitApp.FORM_ELEMENT_TYPES;
 
     try {
         res.send({
