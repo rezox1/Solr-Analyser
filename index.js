@@ -162,6 +162,7 @@ app.get("/checkAll", async (req, res) => {
             code: 'OK'
         });
 
+        logger.info("Trying to get UMLSchema...");
         const {packages,entities} = await digitApp.getUMLSchema();
         logger.info("Total entities count is " + entities.length);
         
@@ -214,7 +215,7 @@ app.get("/checkAll", async (req, res) => {
             if (i % 100 === 0) {
                 logger.info(i + " forms processed");
             }
-            if (i === 5000) {
+            if (i === 500) {
                 break;
             }
         }
