@@ -114,7 +114,7 @@ app.get("/", async (req, res) => {
 });
 
 app.get("/checkAll", async (req, res) => {
-    async function processElement(element, entitiesMap, linksMap){
+    async function processFormElement(element, entitiesMap, linksMap){
         const elementType = element.objectType;
         if (elementType === FORM_ELEMENT_TYPES.LINK || elementType === FORM_ELEMENT_TYPES.TABLE) {
             await processFormLink(element, entitiesMap, linksMap);
@@ -134,13 +134,27 @@ app.get("/checkAll", async (req, res) => {
         let fieldGroupElements = element.properties.elements;
         if (fieldGroupElements) {
             for (let key in fieldGroupElements) {
-                await processElement(fieldGroupElements[key], entitiesMap, linksMap);
+                await processFormElement(fieldGroupElements[key], entitiesMap, linksMap);
+            }
+        }
+    }
+    async function processVisElement(visElement, entitiesMap){
+        let elementDataBind = visElement.dataBind;
+        if (elementDataBind) {
+            //default bindType is entity
+            if (!visElement.gridBindType || visElement.gridBindType === "entity") {
+                await processEntityById(elementDataBind, entitiesMap);
+            }
+        }
+        if (visElement.elements && visElement.elements.length > 0) {
+            for (let element of visElement.elements) {
+                await processVisElement(element, entitiesMap);
             }
         }
     }
     async function processEntityById(entityId, entitiesMap){
         const entityData = entitiesMap.get(entityId);
-        if (!entityData.checked) {
+        if (entityData && !entityData.checked) {
             let [solrCount, orientCount] = await Promise.all([
                 solrApp.getDocsCount(entityId),
                 orientApp.getDocsCount(entityData.dbname)
@@ -154,13 +168,31 @@ app.get("/checkAll", async (req, res) => {
             entityData.checked = true;
         }
     }
+    function getDbName(entity, packagesMap){
+        let entityDBName, entityName = entity.properties.name,
+            packageName = packagesMap.get(entity.packageId);
+        
+        if (SPECIAL_PACKAGES.includes(packageName)) {
+            entityDBName = entityName;
+        } else {
+            entityDBName = "DataEntity_" + packageName + "_" + entityName
+        }
+
+        return entityDBName;
+    }
     //типы элементов на форме
     const FORM_ELEMENT_TYPES = digitApp.FORM_ELEMENT_TYPES;
-
+    //системные пакеты, названия сущностей которых совпадают с названиями классов в БД
+    const SPECIAL_PACKAGES = [
+        "MessagePackage",
+        "ApiInterface"
+    ];
     try {
         res.send({
             code: 'OK'
         });
+
+        logger.info("Let's scan " + digitAppUrl + " for missed solr documents");
 
         logger.info("Trying to get UMLSchema...");
         const {packages,entities} = await digitApp.getUMLSchema();
@@ -189,7 +221,7 @@ app.get("/checkAll", async (req, res) => {
                 if (!EntitiesMap.has(entity.objectId)) {
                     EntitiesMap.set(entity.objectId, {
                         "checked": false,
-                        "dbname": "DataEntity_" + PackagesMap.get(entity.packageId) + "_" + entity.properties.name,
+                        "dbname": getDbName(entity, PackagesMap),
                         "hasDifference": false,
                         "delta": 0
                     });
@@ -211,7 +243,7 @@ app.get("/checkAll", async (req, res) => {
         for (let form of forms) {
             let {elements} = await digitApp.getFormData(form.objectId);
             for (let element of elements) {
-                await processElement(element, EntitiesMap, LinksMap);
+                await processFormElement(element, EntitiesMap, LinksMap);
             }
             i++;
             if (i % 100 === 0) {
@@ -222,10 +254,25 @@ app.get("/checkAll", async (req, res) => {
             }
         }
 
-        /*
         const vises = await digitApp.getVises();
         logger.info("Total vises count is " + vises.length);
-        */
+        
+        const VISES_PROCESSING_LIMIT = config.get("other.visLimit");
+
+        i = 0;
+        for (let vis of vises) {
+            let {elements} = await digitApp.getVisData(vis.objectId);
+            for (let element of elements) {
+                await processVisElement(element, EntitiesMap);
+            }
+            i++;
+            if (i % 100 === 0) {
+                logger.info(i + " vises processed");
+            }
+            if (i === VISES_PROCESSING_LIMIT) {
+                break;
+            }
+        }
 
         const resultEntitiesObject = {}
 
