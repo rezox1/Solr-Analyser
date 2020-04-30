@@ -238,8 +238,6 @@ app.get("/checkAll", async (req, res) => {
         logger.info(resultEntitiesObject);
         logger.info("Operation completed");
     } catch (err) {
-        res.sendStatus(400);
-
         logger.error(err);
     }
 });
