@@ -205,6 +205,8 @@ app.get("/checkAll", async (req, res) => {
         const forms = await digitApp.getForms();
         logger.info("Total forms count is " + forms.length);
         
+        const FORM_PROCESSING_LIMIT = config.get("other.formLimit");
+
         let i = 0;
         for (let form of forms) {
             let {elements} = await digitApp.getFormData(form.objectId);
@@ -215,7 +217,7 @@ app.get("/checkAll", async (req, res) => {
             if (i % 100 === 0) {
                 logger.info(i + " forms processed");
             }
-            if (i === 500) {
+            if (i === FORM_PROCESSING_LIMIT) {
                 break;
             }
         }
