@@ -109,7 +109,7 @@ app.get("/", async (req, res) => {
     } catch (err) {
         res.sendStatus(400);
 
-        console.error(err);
+        logger.error(err);
     }
 });
 
@@ -240,7 +240,7 @@ app.get("/checkAll", async (req, res) => {
     } catch (err) {
         res.sendStatus(400);
 
-        console.error(err);
+        logger.error(err);
     }
 });
 
