@@ -96,7 +96,7 @@ const orientApp = (() => {
 
 app.use(express.json()) // for parsing application/json
 app.use(express.urlencoded({ extended: true })) // for parsing application/x-www-form-urlencoded
-//app.use(cors()); //for using cors
+app.use(cors()); //for using cors
 
 const port = config.get("application.port");
 app.listen(port);
@@ -112,6 +112,8 @@ app.get("/", async (req, res) => {
         logger.error(err);
     }
 });
+
+let resultEntitiesObject = {}
 
 app.get("/checkAll", async (req, res) => {
     async function processFormElement(element, entitiesMap, linksMap){
@@ -162,6 +164,8 @@ app.get("/checkAll", async (req, res) => {
                 solrApp.getDocsCount(entityId),
                 orientApp.getDocsCount(entityData.dbname)
             ]);
+            entityData.solrCount = solrCount;
+            entityData.orientCount = orientCount;
             
             if (solrCount !== orientCount) {
                 entityData.hasDifference = true;
@@ -171,10 +175,8 @@ app.get("/checkAll", async (req, res) => {
             entityData.checked = true;
         }
     }
-    function getDbName(entity, packagesMap){
-        let entityDBName, entityName = entity.properties.name,
-            packageName = packagesMap.get(entity.packageId);
-        
+    function getDbName(entityName, packageName){
+        let entityDBName;
         if (SPECIAL_PACKAGES.includes(packageName)) {
             entityDBName = entityName;
         } else {
@@ -222,9 +224,13 @@ app.get("/checkAll", async (req, res) => {
             }
             if (entity.objectId) {
                 if (!EntitiesMap.has(entity.objectId)) {
+                    let entityName = entity.properties.name, 
+                        packageName = PackagesMap.get(entity.packageId);
+
                     EntitiesMap.set(entity.objectId, {
                         "checked": false,
-                        "dbname": getDbName(entity, PackagesMap),
+                        "dbname": getDbName(entityName, packageName),
+                        "umlName": packageName + "." + entityName,
                         "hasDifference": false,
                         "delta": 0
                     });
@@ -277,13 +283,16 @@ app.get("/checkAll", async (req, res) => {
             }
         }
 
-        const resultEntitiesObject = {}
+        resultEntitiesObject = {};
 
         for (let [entityId, entityData] of EntitiesMap) {
             if (entityData.hasDifference) {
                 resultEntitiesObject[entityId] = {
                     "delta": entityData.delta,
-                    "dbname": entityData.dbname
+                    "dbname": entityData.dbname,
+                    "umlName": entityData.umlName,
+                    "orientCount": entityData.orientCount,
+                    "solrCount": entityData.solrCount
                 }
             }
         }
@@ -291,6 +300,16 @@ app.get("/checkAll", async (req, res) => {
         logger.info(resultEntitiesObject);
         logger.info("Operation completed");
     } catch (err) {
+        logger.error(err);
+    }
+});
+
+app.get("/getLastResult", async (req, res) => {
+    try {
+        res.send(resultEntitiesObject);
+    } catch (err) {
+        res.sendStatus(400);
+
         logger.error(err);
     }
 });
