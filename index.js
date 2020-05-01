@@ -142,8 +142,11 @@ app.get("/checkAll", async (req, res) => {
         let elementDataBind = visElement.dataBind;
         if (elementDataBind) {
             //default bindType is entity
-            if (!visElement.gridBindType || visElement.gridBindType === "entity") {
-                await processEntityById(elementDataBind, entitiesMap);
+            if ((!visElement.gridBindType || visElement.gridBindType === "entity") && visElement.properties) {
+                let elementModeReading = visElement.properties.modeReading;
+                if (!elementModeReading || elementModeReading === "solr") {
+                    await processEntityById(elementDataBind, entitiesMap);
+                }
             }
         }
         if (visElement.elements && visElement.elements.length > 0) {
