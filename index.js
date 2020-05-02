@@ -135,7 +135,7 @@ app.get("/", async (req, res) => {
     }
 });
 
-let resultEntitiesObject = {}
+let resultObject = {}
 
 app.get("/checkAll", async (req, res) => {
     async function processFormElement(element, entitiesMap, linksMap){
@@ -162,20 +162,26 @@ app.get("/checkAll", async (req, res) => {
             }
         }
     }
-    async function processVisElement(visElement, entitiesMap){
+    async function processVisElement(visElement, entitiesMap, workflowsMap){
         let elementDataBind = visElement.dataBind;
-        if (elementDataBind) {
+        if (elementDataBind && visElement.properties) {
+            let elementGridBindType = visElement.gridBindType;
             //default bindType is entity
-            if ((!visElement.gridBindType || visElement.gridBindType === "entity") && visElement.properties) {
+            if (!elementGridBindType || elementGridBindType === "entity") {
                 let elementModeReading = visElement.properties.modeReading;
                 if (!elementModeReading || elementModeReading === "solr") {
                     await processEntityById(elementDataBind, entitiesMap);
+                }
+            } else if (elementGridBindType === "workflow") {
+                let elementModeReading = visElement.properties.modeReading;
+                if (!elementModeReading || elementModeReading === "solr") {
+                    await processWorkflowById(elementDataBind, workflowsMap);
                 }
             }
         }
         if (visElement.elements && visElement.elements.length > 0) {
             for (let element of visElement.elements) {
-                await processVisElement(element, entitiesMap);
+                await processVisElement(element, entitiesMap, workflowsMap);
             }
         }
     }
@@ -195,6 +201,24 @@ app.get("/checkAll", async (req, res) => {
             }
 
             entityData.checked = true;
+        }
+    }
+    async function processWorkflowById(workflowId, workflowsMap){
+        const workflowData = workflowsMap.get(workflowId);
+        if (workflowData && !workflowData.checked) {
+            let [solrCount, orientCount] = await Promise.all([
+                solrApp.getDocsCountByWorkflowId(workflowId),
+                orientApp.getDocsCountByWorkflowId(workflowId)
+            ]);
+            workflowData.solrCount = solrCount;
+            workflowData.orientCount = orientCount;
+            
+            if (solrCount !== orientCount) {
+                workflowData.hasDifference = true;
+                workflowData.delta = solrCount - orientCount;
+            }
+
+            workflowData.checked = true;
         }
     }
     function getDbName(entityName, packageName){
@@ -264,6 +288,30 @@ app.get("/checkAll", async (req, res) => {
             }
         }
         logger.info("Finished UML schema processing");
+
+        logger.info("Trying to get workflows...");
+        const workflows = await digitApp.getWorkflows();
+        logger.info("Total workflows count is " + workflows.length);
+        
+        const WorkflowsMap = new Map();
+        for (let workflow of workflows) {
+            let workflowObjectId = workflow.objectId;
+            if (workflowObjectId) {
+                if (!WorkflowsMap.has(workflowObjectId)) {
+                    WorkflowsMap.set(workflowObjectId, {
+                        "checked": false,
+                        "name": workflow.title,
+                        "hasDifference": false,
+                        "delta": 0
+                    });
+                } else {
+                    throw new Error("Workflow " + workflowObjectId + " has dublicate");
+                }
+            } else {
+                throw new Error("There is workflow without objectId");
+            }
+        }
+        logger.info("Finished workflows processing");
 
         logger.info("Trying to get forms...");
         let forms = await digitApp.getForms();
@@ -351,7 +399,7 @@ app.get("/checkAll", async (req, res) => {
         for (let visData of visDatas) {
             let elements = visData.elements;
             for (let element of elements) {
-                await processVisElement(element, EntitiesMap);
+                await processVisElement(element, EntitiesMap, WorkflowsMap);
             }
             visesProcessedCount++;
             if (visesProcessedCount % 100 === 0) {
@@ -360,8 +408,7 @@ app.get("/checkAll", async (req, res) => {
         }
         logger.info("Vises processing complete");
 
-        resultEntitiesObject = {};
-
+        let resultEntitiesObject = {};
         for (let [entityId, entityData] of EntitiesMap) {
             if (entityData.hasDifference) {
                 resultEntitiesObject[entityId] = {
@@ -373,8 +420,26 @@ app.get("/checkAll", async (req, res) => {
                 }
             }
         }
-
         logger.info(resultEntitiesObject);
+        
+        let resultWorkflowObject = {};
+        for (let [workflowId, workflowData] of WorkflowsMap) {
+            if (workflowData.hasDifference) {
+                resultWorkflowObject[workflowId] = {
+                    "name": workflowData.name,
+                    "delta": workflowData.delta,
+                    "orientCount": workflowData.orientCount,
+                    "solrCount": workflowData.solrCount
+                }
+            }
+        }
+        logger.info(resultWorkflowObject);
+
+        resultObject = {
+            resultEntitiesObject,
+            resultWorkflowObject
+        }
+
         logger.info("Operation completed");
     } catch (err) {
         logger.error(err);
@@ -383,7 +448,7 @@ app.get("/checkAll", async (req, res) => {
 
 app.get("/getLastResult", async (req, res) => {
     try {
-        res.send(resultEntitiesObject);
+        res.send(resultObject);
     } catch (err) {
         res.sendStatus(400);
 
