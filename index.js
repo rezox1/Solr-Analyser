@@ -25,8 +25,17 @@ const solrApp = (() => {
     const solrCore = config.get("solr.core");
 
     return {
-        getDocsCount: async function(entityId){
+        getDocsCountByEntityId: async function(entityId) {
             const {data: {response:{numFound}}} = await axios.get(solrUrl + solrCore + "/select?q=entityId_sm:" + entityId + "&rows=0&start=0", {
+                headers: {
+                    "Content-Type": "application/json;charset=UTF-8"
+                }
+            });
+
+            return numFound;
+        },
+        getDocsCountByWorkflowId: async function(workflowId) {
+            const {data: {response:{numFound}}} = await axios.get(solrUrl + solrCore + "/select?q=workflowId_s:" + workflowId + "&rows=0&start=0", {
                 headers: {
                     "Content-Type": "application/json;charset=UTF-8"
                 }
@@ -78,9 +87,22 @@ const orientApp = (() => {
     });
 
     return {
-        getDocsCount: async function(entityClassName){
-            const searchString = "SELECT count(*) FROM " + entityClassName + " WHERE (deleted = false or deleted is null)";
+        getDocsCountByClassName: async function(entityClassName) {
             const userCookie = await CookieManager.getActualCookie();
+            const searchString = "SELECT count(*) FROM " + entityClassName + " WHERE (deleted = false or deleted is null)";
+
+            let {"data":{"result":searchResult}} = await axios.post(orientUrl + `command/${orientDBName}/sql/-/20?format=rid,type,version,class,graph`, searchString, {
+                headers: {
+                    "Content-Type": "application/json;charset=UTF-8",
+                    "Cookie": userCookie
+                }
+            });
+            searchResult = searchResult[0];
+            return searchResult.count;
+        },
+        getDocsCountByWorkflowId: async function(workflowId) {
+            const userCookie = await CookieManager.getActualCookie();
+            const searchString = "SELECT count(*) FROM ProcessScope where workflow.objectId = \"" + workflowId + "\" AND processInstanceState <> \"TERMINATED\"";
 
             let {"data":{"result":searchResult}} = await axios.post(orientUrl + `command/${orientDBName}/sql/-/20?format=rid,type,version,class,graph`, searchString, {
                 headers: {
@@ -161,8 +183,8 @@ app.get("/checkAll", async (req, res) => {
         const entityData = entitiesMap.get(entityId);
         if (entityData && !entityData.checked) {
             let [solrCount, orientCount] = await Promise.all([
-                solrApp.getDocsCount(entityId),
-                orientApp.getDocsCount(entityData.dbname)
+                solrApp.getDocsCountByEntityId(entityId),
+                orientApp.getDocsCountByClassName(entityData.dbname)
             ]);
             entityData.solrCount = solrCount;
             entityData.orientCount = orientCount;
@@ -243,45 +265,100 @@ app.get("/checkAll", async (req, res) => {
         }
         logger.info("Finished UML schema processing");
 
-        const forms = await digitApp.getForms();
+        logger.info("Trying to get forms...");
+        let forms = await digitApp.getForms();
         logger.info("Total forms count is " + forms.length);
         
         const FORM_PROCESSING_LIMIT = config.get("other.formLimit");
+        if (FORM_PROCESSING_LIMIT !== -1 && FORM_PROCESSING_LIMIT < forms.length) {
+            forms.length = FORM_PROCESSING_LIMIT;
+        }
+        forms = forms.map(form => form.objectId);
 
-        let i = 0;
-        for (let form of forms) {
-            let {elements} = await digitApp.getFormData(form.objectId);
+        logger.info("Trying to get forms data...");
+        const FORM_PROCESSING_FLOWS_COUNT = config.get("other.formFlowsCount");
+        logger.info("Total flows count for forms is " + FORM_PROCESSING_FLOWS_COUNT);
+
+        let formGettingFlows = [], formsIterator = forms[Symbol.iterator](),
+            formDatas = [], formsDataReceivedAmount = 0;
+        for (let i = 0; i < FORM_PROCESSING_FLOWS_COUNT; i++) {
+            let newFlow = startFlow({
+                execFunction: async function(formObjectId) {
+                    let formData = await digitApp.getFormData(formObjectId);
+                    formDatas.push(formData);
+                    
+                    formsDataReceivedAmount++;
+                    if (formsDataReceivedAmount % 100 === 0) {
+                        logger.info(formsDataReceivedAmount + " forms data received");
+                    }
+                },
+                iterator: formsIterator
+            });
+            formGettingFlows.push(newFlow);
+        }
+        await Promise.all(formGettingFlows);
+        logger.info("Finished getting forms data");
+
+        logger.info("Starting forms processing...");
+        let formsProcessedCount = 0;
+        for (let formData of formDatas) {
+            let elements = formData.elements;
             for (let element of elements) {
                 await processFormElement(element, EntitiesMap, LinksMap);
             }
-            i++;
-            if (i % 100 === 0) {
-                logger.info(i + " forms processed");
-            }
-            if (i === FORM_PROCESSING_LIMIT) {
-                break;
+            formsProcessedCount++;
+            if (formsProcessedCount % 100 === 0) {
+                logger.info(formsProcessedCount + " forms processed");
             }
         }
+        logger.info("Forms processing complete");
 
-        const vises = await digitApp.getVises();
+        let vises = await digitApp.getVises();
         logger.info("Total vises count is " + vises.length);
-        
-        const VISES_PROCESSING_LIMIT = config.get("other.visLimit");
 
-        i = 0;
-        for (let vis of vises) {
-            let {elements} = await digitApp.getVisData(vis.objectId);
+        const VISES_PROCESSING_LIMIT = config.get("other.visLimit");
+        if (VISES_PROCESSING_LIMIT !== -1 && VISES_PROCESSING_LIMIT < vises.length) {
+            vises.length = VISES_PROCESSING_LIMIT;
+        }
+        vises = vises.map(vis => vis.objectId);
+
+        logger.info("Trying to get vises data...");
+        const VIS_PROCESSING_FLOWS_COUNT = config.get("other.visFlowsCount");
+        logger.info("Total flows count for vises is " + VIS_PROCESSING_FLOWS_COUNT);
+
+        let visGettingFlows = [], visesIterator = vises[Symbol.iterator](),
+            visDatas = [], visesDataReceivedAmount = 0;
+        for (let i = 0; i < VIS_PROCESSING_FLOWS_COUNT; i++) {
+            let newFlow = startFlow({
+                execFunction: async function(visObjectId) {
+                    let visData = await digitApp.getVisData(visObjectId);
+                    visDatas.push(visData);
+                    
+                    visesDataReceivedAmount++;
+                    if (visesDataReceivedAmount % 100 === 0) {
+                        logger.info(visesDataReceivedAmount + " vises data received");
+                    }
+                },
+                iterator: visesIterator
+            });
+            visGettingFlows.push(newFlow);
+        }
+        await Promise.all(visGettingFlows);
+        logger.info("Finished getting vises data");
+
+        logger.info("Starting vises processing...");
+        let visesProcessedCount = 0;
+        for (let visData of visDatas) {
+            let elements = visData.elements;
             for (let element of elements) {
                 await processVisElement(element, EntitiesMap);
             }
-            i++;
-            if (i % 100 === 0) {
-                logger.info(i + " vises processed");
-            }
-            if (i === VISES_PROCESSING_LIMIT) {
-                break;
+            visesProcessedCount++;
+            if (visesProcessedCount % 100 === 0) {
+                logger.info(visesProcessedCount + " vises processed");
             }
         }
+        logger.info("Vises processing complete");
 
         resultEntitiesObject = {};
 
@@ -338,4 +415,16 @@ function globalCookieManager({loginFunction, checkCookieFunction}){
         }
     }
     this.refreshCookie = refreshCookie;
+}
+
+async function startFlow({execFunction,iterator}){
+    let isRunning = true, nextIteration;
+    while (isRunning) {
+        nextIteration = iterator.next();
+        if (!nextIteration.done) {
+            await execFunction(nextIteration.value);
+        } else {
+            isRunning = false;
+        }
+    }
 }
