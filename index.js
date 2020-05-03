@@ -22,10 +22,17 @@ const digitApp = new DigitApp({
 
 const solrApp = (() => {
     const solrUrl = config.get("solr.url");
-    const solrCore = config.get("solr.core");
+    const defaultSolrCore = config.get("solr.core");
+    const wsName = config.get("digit.wsName");
 
     return {
-        getDocsCountByEntityId: async function(entityId) {
+        getDocsCountByEntityId: async function(entityId, coreName) {
+            let solrCore;
+            if (!coreName) {
+                solrCore = defaultSolrCore;
+            } else {
+                solrCore = wsName + "_" + coreName;
+            }
             const {data: {response:{numFound}}} = await axios.get(solrUrl + solrCore + "/select?q=entityId_sm:" + entityId + "&rows=0&start=0", {
                 headers: {
                     "Content-Type": "application/json;charset=UTF-8"
@@ -35,6 +42,7 @@ const solrApp = (() => {
             return numFound;
         },
         getDocsCountByWorkflowId: async function(workflowId) {
+            let solrCore = defaultSolrCore;
             const {data: {response:{numFound}}} = await axios.get(solrUrl + solrCore + "/select?q=workflowId_s:" + workflowId + "&rows=0&start=0", {
                 headers: {
                     "Content-Type": "application/json;charset=UTF-8"
@@ -87,6 +95,42 @@ const orientApp = (() => {
     });
 
     return {
+        getDBNamesMap: async function() {
+            const DBNamesMap = new Map();
+
+            const userCookie = await CookieManager.getActualCookie();
+            const searchString = `select objectId, properties.dbName as dbName from (traverse * from (select entities from journalspec where name="UmlJournal")) where @class="EntitySpec" and properties.dbName is not null and properties.dbName <> "" limit -1`;
+
+            let {"data":{"result":searchResult}} = await axios.post(orientUrl + `command/${orientDBName}/sql/-/20?format=rid,type,version,class,graph`, searchString, {
+                headers: {
+                    "Content-Type": "application/json;charset=UTF-8",
+                    "Cookie": userCookie
+                }
+            });
+            for (let entityData of searchResult) {
+                DBNamesMap.set(entityData.objectId, entityData.dbName);
+            }
+
+            return DBNamesMap;
+        },
+        getCustomSolrCoreEntitiesMap: async function() {
+            const customSolrCoreEntitiesMap = new Map();
+
+            const userCookie = await CookieManager.getActualCookie();
+            const searchString = `select objectId, properties.solrCore as solrCore from (traverse * from (select entities from journalspec where name="UmlJournal")) where @class="EntitySpec" and properties.solrCore is not null and properties.solrCore <> "" limit -1`;
+
+            let {"data":{"result":searchResult}} = await axios.post(orientUrl + `command/${orientDBName}/sql/-/20?format=rid,type,version,class,graph`, searchString, {
+                headers: {
+                    "Content-Type": "application/json;charset=UTF-8",
+                    "Cookie": userCookie
+                }
+            });
+            for (let entityData of searchResult) {
+                customSolrCoreEntitiesMap.set(entityData.objectId, entityData.solrCore);
+            }
+
+            return customSolrCoreEntitiesMap;
+        },
         getDocsCountByClassName: async function(entityClassName) {
             const userCookie = await CookieManager.getActualCookie();
             const searchString = "SELECT count(*) FROM " + entityClassName + " WHERE (deleted = false or deleted is null)";
@@ -188,8 +232,10 @@ app.get("/checkAll", async (req, res) => {
     async function processEntityById(entityId, entitiesMap){
         const entityData = entitiesMap.get(entityId);
         if (entityData && !entityData.checked) {
+            let solrCoreName = entityData.solrCore;
+
             let [solrCount, orientCount] = await Promise.all([
-                solrApp.getDocsCountByEntityId(entityId),
+                solrApp.getDocsCountByEntityId(entityId, solrCoreName),
                 orientApp.getDocsCountByClassName(entityData.dbname)
             ]);
             entityData.solrCount = solrCount;
@@ -221,23 +267,8 @@ app.get("/checkAll", async (req, res) => {
             workflowData.checked = true;
         }
     }
-    function getDbName(entityName, packageName){
-        let entityDBName;
-        if (SPECIAL_PACKAGES.includes(packageName)) {
-            entityDBName = entityName;
-        } else {
-            entityDBName = "DataEntity_" + packageName + "_" + entityName
-        }
-
-        return entityDBName;
-    }
     //типы элементов на форме
     const FORM_ELEMENT_TYPES = digitApp.FORM_ELEMENT_TYPES;
-    //системные пакеты, названия сущностей которых совпадают с названиями классов в БД
-    const SPECIAL_PACKAGES = [
-        "MessagePackage",
-        "ApiInterface"
-    ];
     try {
         res.send({
             code: 'OK'
@@ -249,6 +280,10 @@ app.get("/checkAll", async (req, res) => {
         const {packages,entities} = await digitApp.getUMLSchema();
         logger.info("Total entities count is " + entities.length);
         
+        logger.info("Trying to get dbnames map...");
+        const DBNamesMap = await orientApp.getDBNamesMap();
+        logger.info("Finished getting dbnames map");
+
         const PackagesMap = new Map();
         for (let package of packages) {
             PackagesMap.set(package.objectId, package.properties.name);
@@ -271,11 +306,16 @@ app.get("/checkAll", async (req, res) => {
             if (entity.objectId) {
                 if (!EntitiesMap.has(entity.objectId)) {
                     let entityName = entity.properties.name, 
-                        packageName = PackagesMap.get(entity.packageId);
+                        packageName = PackagesMap.get(entity.packageId),
+                        dbName = DBNamesMap.get(entity.objectId);
+                    //entity is not synchronized
+                    if (!dbName) {
+                        continue;
+                    }
 
                     EntitiesMap.set(entity.objectId, {
                         "checked": false,
-                        "dbname": getDbName(entityName, packageName),
+                        "dbname": dbName,
                         "umlName": packageName + "." + entityName,
                         "hasDifference": false,
                         "delta": 0
@@ -288,6 +328,18 @@ app.get("/checkAll", async (req, res) => {
             }
         }
         logger.info("Finished UML schema processing");
+
+        logger.info("Trying to get custom solr core entities map...");
+        const CustomSolrCoreEntitiesMap = await orientApp.getCustomSolrCoreEntitiesMap();
+        logger.info("Finished getting custom solr core entities map");
+
+        for (let [entityId, solrCoreName] of CustomSolrCoreEntitiesMap) {
+            let entityData = EntitiesMap.get(entityId);
+            if (entityData) {
+                entityData.solrCore = solrCoreName;
+            }
+        }
+        logger.info("Finished custom solr cores processing");
 
         logger.info("Trying to get workflows...");
         const workflows = await digitApp.getWorkflows();
