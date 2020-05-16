@@ -179,7 +179,10 @@ app.get("/", async (req, res) => {
     }
 });
 
-let resultObject = {}
+//map object for storing workflows information
+const WorkflowsMap = new Map();
+//map object for storing entities information
+const EntitiesMap = new Map();
 
 app.get("/checkAll", async (req, res) => {
     async function processFormElement(element, entitiesMap, linksMap){
@@ -289,8 +292,9 @@ app.get("/checkAll", async (req, res) => {
             PackagesMap.set(package.objectId, package.properties.name);
         }
 
-        const EntitiesMap = new Map(),
-            LinksMap = new Map();        
+        EntitiesMap.clear();
+
+        const LinksMap = new Map();        
         for (let entity of entities) {
             for (let link of entity.links) {
                 if (link.objectId) {
@@ -345,7 +349,7 @@ app.get("/checkAll", async (req, res) => {
         const workflows = await digitApp.getWorkflows();
         logger.info("Total workflows count is " + workflows.length);
         
-        const WorkflowsMap = new Map();
+        WorkflowsMap.clear();
         for (let workflow of workflows) {
             let workflowObjectId = workflow.objectId;
             if (workflowObjectId) {
@@ -460,6 +464,16 @@ app.get("/checkAll", async (req, res) => {
         }
         logger.info("Vises processing complete");
 
+        logger.info("Operation completed");
+    } catch (err) {
+        logger.error(err);
+    }
+});
+
+app.get("/getLastResult", async (req, res) => {
+    try {
+        let resultObject = {}
+
         let resultEntitiesObject = {};
         for (let [entityId, entityData] of EntitiesMap) {
             if (entityData.hasDifference) {
@@ -472,7 +486,6 @@ app.get("/checkAll", async (req, res) => {
                 }
             }
         }
-        logger.info(resultEntitiesObject);
         
         let resultWorkflowObject = {};
         for (let [workflowId, workflowData] of WorkflowsMap) {
@@ -485,21 +498,33 @@ app.get("/checkAll", async (req, res) => {
                 }
             }
         }
-        logger.info(resultWorkflowObject);
 
         resultObject = {
             resultEntitiesObject,
             resultWorkflowObject
         }
 
-        logger.info("Operation completed");
+        res.send(resultObject);
     } catch (err) {
+        res.sendStatus(400);
+
         logger.error(err);
     }
 });
 
-app.get("/getLastResult", async (req, res) => {
+app.get("/getSolrEntitiesMap", async (req, res) => {
     try {
+        let resultObject = {}
+
+        for (let [entityId, entityData] of EntitiesMap) {
+            if (entityData.checked) {
+                resultObject[entityId] = {
+                    "umlName": entityData.umlName,
+                    "solrCount": entityData.solrCount
+                }
+            }
+        }
+
         res.send(resultObject);
     } catch (err) {
         res.sendStatus(400);
