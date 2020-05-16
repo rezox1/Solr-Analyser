@@ -21,33 +21,44 @@ const digitApp = new DigitApp({
 });
 
 const solrApp = (() => {
+    async function makeSolrQuery(queryString, coreName){
+        const solrCore = coreName || defaultSolrCore;
+
+        const {data:{response}} = await axios.get(solrUrl + solrCore + "/select?q=" + queryString + "&rows=0&start=0", {
+            headers: {
+                "Content-Type": "application/json;charset=UTF-8"
+            }
+        });
+
+        return response;
+    }
+
     const solrUrl = config.get("solr.url");
     const defaultSolrCore = config.get("solr.core");
     const wsName = config.get("digit.wsName");
 
     return {
         getDocsCountByEntityId: async function(entityId, coreName) {
-            let solrCore;
-            if (!coreName) {
-                solrCore = defaultSolrCore;
-            } else {
-                solrCore = wsName + "_" + coreName;
-            }
-            const {data: {response:{numFound}}} = await axios.get(solrUrl + solrCore + "/select?q=entityId_sm:" + entityId + "&rows=0&start=0", {
-                headers: {
-                    "Content-Type": "application/json;charset=UTF-8"
-                }
-            });
+            const queryString = "entityId_sm:" + entityId;
+            const {numFound} = await makeSolrQuery(queryString, coreName);
 
             return numFound;
         },
         getDocsCountByWorkflowId: async function(workflowId) {
-            let solrCore = defaultSolrCore;
-            const {data: {response:{numFound}}} = await axios.get(solrUrl + solrCore + "/select?q=workflowId_s:" + workflowId + "&rows=0&start=0", {
-                headers: {
-                    "Content-Type": "application/json;charset=UTF-8"
-                }
-            });
+            const queryString = "workflowId_s:" + workflowId;
+            const {numFound} = await makeSolrQuery(queryString);
+
+            return numFound;
+        },
+        getTotalDocsCountByEntities: async function() {
+            const queryString = "entityId_sm:[* TO *] && -(workflowId_s:[* TO *])";
+            const {numFound} = await makeSolrQuery(queryString);
+
+            return numFound;
+        },
+        getTotalDocsCountByWorkflows: async function() {
+            const queryString = "-(entityId_sm:[* TO *]) && workflowId_s:[* TO *]";
+            const {numFound} = await makeSolrQuery(queryString);
 
             return numFound;
         }
@@ -504,16 +515,19 @@ app.get("/getLastResult", async (req, res) => {
 
 app.get("/getSolrEntitiesMap", async (req, res) => {
     try {
-        let resultObject = {}
+        const resultObject = {}
+        resultObject.totalDocsCount = await solrApp.getTotalDocsCountByEntities();
 
+        const entitiesData = {}
         for (let [entityId, entityData] of EntitiesMap) {
             if (entityData.checked) {
-                resultObject[entityId] = {
+                entitiesData[entityId] = {
                     "umlName": entityData.umlName,
                     "solrCount": entityData.solrCount
                 }
             }
         }
+        resultObject.entitiesData = entitiesData;
 
         res.send(resultObject);
     } catch (err) {
@@ -525,16 +539,19 @@ app.get("/getSolrEntitiesMap", async (req, res) => {
 
 app.get("/getSolrWorkflowsMap", async (req, res) => {
     try {
-        let resultObject = {}
+        const resultObject = {}
+        resultObject.totalDocsCount = await solrApp.getTotalDocsCountByWorkflows();
 
+        const workflowsData = {}
         for (let [workflowId, workflowData] of WorkflowsMap) {
             if (workflowData.checked) {
-                resultObject[workflowId] = {
+                workflowsData[workflowId] = {
                     "name": workflowData.name,
                     "solrCount": workflowData.solrCount
                 }
             }
         }
+        resultObject.workflowsData = workflowsData;
 
         res.send(resultObject);
     } catch (err) {
