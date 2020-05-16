@@ -533,6 +533,27 @@ app.get("/getSolrEntitiesMap", async (req, res) => {
     }
 });
 
+app.get("/getSolrWorkflowsMap", async (req, res) => {
+    try {
+        let resultObject = {}
+
+        for (let [workflowId, workflowData] of WorkflowsMap) {
+            if (workflowData.checked) {
+                resultObject[workflowId] = {
+                    "name": workflowData.name,
+                    "solrCount": workflowData.solrCount
+                }
+            }
+        }
+
+        res.send(resultObject);
+    } catch (err) {
+        res.sendStatus(400);
+
+        logger.error(err);
+    }
+});
+
 function globalCookieManager({loginFunction, checkCookieFunction}){
     async function refreshCookie() {
         cookie = await loginFunction();

@@ -1,0 +1,32 @@
+{
+	"application": {
+		"port": 3000
+	},
+	"digit": {
+		"url": "http://localhost:8080/",
+		"username": "admin",
+		"password": "admin",
+		"wsName": "__MAIN_WS__"
+	},
+	"solr": {
+		"url": "http://localhost:8983/solr/",
+		"core": "vis_demo"
+	},
+	"orientdb": {
+		"url": "http://localhost:2480/",
+		"dbname": "vis_demo",
+		"username": "reader",
+		"password": "reader"
+	},
+	//other settings
+	"other": {
+		//forms limit processing (-1 is unlimited)
+		"formLimit": -1,
+		//flows count for getting forms
+		"formFlowsCount": 10,
+		//vises limit processing (-1 is unlimited)
+		"visLimit": -1,
+		//flows count for getting vises
+		"visFlowsCount": 10
+	}
+}
