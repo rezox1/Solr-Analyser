@@ -55,6 +55,20 @@ const solrApp = (() => {
 })();
 
 const orientApp = (() => {
+    async function makeQuery(queryString){
+        const userCookie = await CookieManager.getActualCookie();
+        const {
+            "data":{"result":searchResult}
+        } = await axios.post(orientUrl + `command/${orientDBName}/sql/-/20?format=rid,type,version,class,graph`, queryString, {
+            headers: {
+                "Content-Type": "application/json;charset=UTF-8",
+                "Cookie": userCookie
+            }
+        });
+
+        return searchResult;
+    }
+
     const orientUrl = config.get("orientdb.url"),
         orientDBName = config.get("orientdb.dbname"),
         orientUsername = config.get("orientdb.username"),
@@ -96,17 +110,12 @@ const orientApp = (() => {
 
     return {
         getDBNamesMap: async function() {
-            const DBNamesMap = new Map();
-
-            const userCookie = await CookieManager.getActualCookie();
             const searchString = `select objectId, properties.dbName as dbName from (traverse * from (select entities from journalspec where name="UmlJournal")) where @class="EntitySpec" and properties.dbName is not null and properties.dbName <> "" limit -1`;
 
-            let {"data":{"result":searchResult}} = await axios.post(orientUrl + `command/${orientDBName}/sql/-/20?format=rid,type,version,class,graph`, searchString, {
-                headers: {
-                    "Content-Type": "application/json;charset=UTF-8",
-                    "Cookie": userCookie
-                }
-            });
+            const searchResult = await makeQuery(searchString);
+
+            const DBNamesMap = new Map();
+
             for (let entityData of searchResult) {
                 DBNamesMap.set(entityData.objectId, entityData.dbName);
             }
@@ -114,17 +123,12 @@ const orientApp = (() => {
             return DBNamesMap;
         },
         getCustomSolrCoreEntitiesMap: async function() {
+            const searchString = `select objectId, properties.solrCore as solrCore from (traverse * from (select entities from journalspec where name="UmlJournal")) where @class="EntitySpec" and properties.solrCore is not null and properties.solrCore <> "" limit -1`;
+            
+            const searchResult = await makeQuery(searchString);
+
             const customSolrCoreEntitiesMap = new Map();
 
-            const userCookie = await CookieManager.getActualCookie();
-            const searchString = `select objectId, properties.solrCore as solrCore from (traverse * from (select entities from journalspec where name="UmlJournal")) where @class="EntitySpec" and properties.solrCore is not null and properties.solrCore <> "" limit -1`;
-
-            let {"data":{"result":searchResult}} = await axios.post(orientUrl + `command/${orientDBName}/sql/-/20?format=rid,type,version,class,graph`, searchString, {
-                headers: {
-                    "Content-Type": "application/json;charset=UTF-8",
-                    "Cookie": userCookie
-                }
-            });
             for (let entityData of searchResult) {
                 customSolrCoreEntitiesMap.set(entityData.objectId, entityData.solrCore);
             }
@@ -132,29 +136,15 @@ const orientApp = (() => {
             return customSolrCoreEntitiesMap;
         },
         getDocsCountByClassName: async function(entityClassName) {
-            const userCookie = await CookieManager.getActualCookie();
             const searchString = "SELECT count(*) FROM " + entityClassName + " WHERE (deleted = false or deleted is null)";
 
-            let {"data":{"result":searchResult}} = await axios.post(orientUrl + `command/${orientDBName}/sql/-/20?format=rid,type,version,class,graph`, searchString, {
-                headers: {
-                    "Content-Type": "application/json;charset=UTF-8",
-                    "Cookie": userCookie
-                }
-            });
-            searchResult = searchResult[0];
+            const [searchResult] = await makeQuery(searchString);
             return searchResult.count;
         },
         getDocsCountByWorkflowId: async function(workflowId) {
-            const userCookie = await CookieManager.getActualCookie();
             const searchString = "SELECT count(*) FROM ProcessScope where workflow.objectId = \"" + workflowId + "\" AND processInstanceState <> \"TERMINATED\"";
 
-            let {"data":{"result":searchResult}} = await axios.post(orientUrl + `command/${orientDBName}/sql/-/20?format=rid,type,version,class,graph`, searchString, {
-                headers: {
-                    "Content-Type": "application/json;charset=UTF-8",
-                    "Cookie": userCookie
-                }
-            });
-            searchResult = searchResult[0];
+            const [searchResult] = await makeQuery(searchString);
             return searchResult.count;
         }
     }
