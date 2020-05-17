@@ -594,6 +594,26 @@ app.get("/getSolrWorkflowsMap", async (req, res) => {
     }
 });
 
+app.get("/getEntitiesList", async (req, res) => {
+    try {
+        const entitiesList = [];
+
+        for (let [entityId, entityData] of EntitiesMap) {
+            if (entityData.checked && entityData.solrCount > 0) {
+                let item = {}
+                item[entityData.umlName] = entityId;
+                entitiesList.push(item);
+            }
+        }
+
+        res.send(entitiesList);
+    } catch (err) {
+        res.sendStatus(400);
+
+        logger.error(err);
+    }
+});
+
 function globalCookieManager({loginFunction, checkCookieFunction}){
     async function refreshCookie() {
         cookie = await loginFunction();
