@@ -14,8 +14,7 @@
   },
   "devDependencies": {},
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "postinstall": "cd ./node_modules/digitjs && npm install"
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "rezox",
   "license": "MIT"
