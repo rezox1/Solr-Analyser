@@ -22,7 +22,12 @@ const digitApp = new DigitApp({
 
 const solrApp = (() => {
     async function makeSolrQuery(queryString, coreName){
-        const solrCore = coreName || defaultSolrCore;
+        let solrCore;
+        if (coreName && coreName !== defaultSolrCore) {
+            solrCore = wsName + "_" + coreName;
+        } else {
+            solrCore = defaultSolrCore;
+        }
 
         const {data:{response}} = await axios.get(solrUrl + solrCore + "/select?q=" + queryString + "&rows=0&start=0", {
             headers: {
@@ -31,6 +36,24 @@ const solrApp = (() => {
         });
 
         return response;
+    }
+    async function getCoresSet(){
+        const coresSet = new Set();
+        coresSet.add(defaultSolrCore);
+
+        const {"data":{"status":coresStatusInfo}} = await axios.get(solrUrl + "admin/cores?indexInfo=false", {
+            headers: {
+                "Content-Type": "application/json;charset=UTF-8"
+            }
+        });
+        for (let coreName in coresStatusInfo) {
+            if (coreName.startsWith(wsName) && coreName !== defaultSolrCore) {
+                let internalCoreName = coreName.replace(wsName + "_", "");
+                coresSet.add(internalCoreName);
+            }
+        }
+
+        return coresSet;
     }
 
     const solrUrl = config.get("solr.url");
@@ -45,16 +68,26 @@ const solrApp = (() => {
             return numFound;
         },
         getDocsCountByWorkflowId: async function(workflowId) {
+            let totalDocsCount = 0;
+
             const queryString = "workflowId_s:" + workflowId;
             const {numFound} = await makeSolrQuery(queryString);
+            totalDocsCount += numFound;
 
-            return numFound;
+            return totalDocsCount;
         },
         getTotalDocsCountByEntities: async function() {
-            const queryString = "entityId_sm:[* TO *] && -(workflowId_s:[* TO *])";
-            const {numFound} = await makeSolrQuery(queryString);
+            let totalDocsCount = 0;
 
-            return numFound;
+            const queryString = "entityId_sm:[* TO *] && -(workflowId_s:[* TO *])";
+
+            const allSolrCores = await getCoresSet();
+            for (let solrCore of allSolrCores) {
+                let {numFound} = await makeSolrQuery(queryString, solrCore);
+                totalDocsCount += numFound; 
+            }
+
+            return totalDocsCount;
         },
         getTotalDocsCountByWorkflows: async function() {
             const queryString = "-(entityId_sm:[* TO *]) && workflowId_s:[* TO *]";
