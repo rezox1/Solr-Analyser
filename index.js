@@ -29,7 +29,7 @@ const solrApp = (() => {
             solrCore = defaultSolrCore;
         }
 
-        const {data:{response}} = await axios.get(solrUrl + solrCore + "/select?q=" + queryString + "&rows=0&start=0", {
+        const {data:{response}} = await solrInstance.get(solrCore + "/select?q=" + queryString + "&rows=0&start=0", {
             headers: {
                 "Content-Type": "application/json;charset=UTF-8"
             }
@@ -41,7 +41,7 @@ const solrApp = (() => {
         const coresSet = new Set();
         coresSet.add(defaultSolrCore);
 
-        const {"data":{"status":coresStatusInfo}} = await axios.get(solrUrl + "admin/cores?indexInfo=false", {
+        const {"data":{"status":coresStatusInfo}} = await solrInstance.get("admin/cores?indexInfo=false", {
             headers: {
                 "Content-Type": "application/json;charset=UTF-8"
             }
@@ -56,9 +56,15 @@ const solrApp = (() => {
         return coresSet;
     }
 
-    const solrUrl = config.get("solr.url");
-    const defaultSolrCore = config.get("solr.core");
+    const solrUrl = config.get("solr.url"),
+        defaultSolrCore = config.get("solr.core");
+    
     const wsName = config.get("digit.wsName");
+
+    const solrInstance = axios.create({
+        "baseURL": solrUrl,
+        "timeout": 60000
+    });
 
     return {
         getDocsCountByEntityId: async function(entityId, coreName) {
@@ -103,7 +109,7 @@ const orientApp = (() => {
         const userCookie = await CookieManager.getActualCookie();
         const {
             "data":{"result":searchResult}
-        } = await axios.post(orientUrl + `command/${orientDBName}/sql/-/20?format=rid,type,version,class,graph`, queryString, {
+        } = await orientInstance.post(`command/${orientDBName}/sql/-/20?format=rid,type,version,class,graph`, queryString, {
             headers: {
                 "Content-Type": "application/json;charset=UTF-8",
                 "Cookie": userCookie
@@ -118,9 +124,14 @@ const orientApp = (() => {
         orientUsername = config.get("orientdb.username"),
         orientPassword = config.get("orientdb.password");
 
+    const orientInstance = axios.create({
+        "baseURL": orientUrl,
+        "timeout": 60000
+    });
+
     const CookieManager = new globalCookieManager({
         "loginFunction": async function(){
-            const loginData = await axios.get(orientUrl + "connect/" + orientDBName, {
+            const loginData = await orientInstance.get("connect/" + orientDBName, {
                 headers: {
                     "Content-Type": "application/json;charset=UTF-8",
                     "Authorization": "Basic " + btoa(orientUsername + ":" + orientPassword)
@@ -138,7 +149,7 @@ const orientApp = (() => {
             try {
                 const cookie = CookieManager.getCookie();
                 const searchString = "SELECT count(*) FROM OUser";
-                await axios.post(orientUrl + `command/${orientDBName}/sql/-/20?format=rid,type,version,class,graph`, searchString, {
+                await orientInstance.post(`command/${orientDBName}/sql/-/20?format=rid,type,version,class,graph`, searchString, {
                     headers: {
                         "Content-Type": "application/json;charset=UTF-8",
                         "Cookie": cookie
@@ -271,10 +282,18 @@ app.get("/checkAll", async (req, res) => {
         if (entityData && !entityData.checked) {
             let solrCoreName = entityData.solrCore;
 
-            let [solrCount, orientCount] = await Promise.all([
-                solrApp.getDocsCountByEntityId(entityId, solrCoreName),
-                orientApp.getDocsCountByClassName(entityData.dbname)
-            ]);
+            let solrCount = 0, orientCount = 0;
+            try {
+                [solrCount, orientCount] = await Promise.all([
+                    solrApp.getDocsCountByEntityId(entityId, solrCoreName),
+                    orientApp.getDocsCountByClassName(entityData.dbname)
+                ]);
+            } catch (err) {
+                if (["ECONNABORTED", "ECONNRESET"].includes(err.code)) {
+                    await processEntityById.apply(null, arguments);
+                    return;
+                }
+            }
             entityData.solrCount = solrCount;
             entityData.orientCount = orientCount;
             
