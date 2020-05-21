@@ -10,6 +10,10 @@ const config = require("config");
 const {DigitApp} = require("digitjs");
 const btoa = require('btoa');
 
+console.log = console.info = logger.info.bind(logger);
+console.warn = logger.warn.bind(logger);
+console.error = logger.error.bind(logger);
+
 const digitAppUrl = config.get("digit.url"),
     digitUsername = config.get("digit.username"),
     digitPassword = config.get("digit.password");
@@ -29,7 +33,7 @@ const solrApp = (() => {
             solrCore = defaultSolrCore;
         }
 
-        const {data:{response}} = await axios.get(solrUrl + solrCore + "/select?q=" + queryString + "&rows=0&start=0", {
+        const {data:{response}} = await solrInstance.get(solrCore + "/select?q=" + queryString + "&rows=0&start=0", {
             headers: {
                 "Content-Type": "application/json;charset=UTF-8"
             }
@@ -41,7 +45,7 @@ const solrApp = (() => {
         const coresSet = new Set();
         coresSet.add(defaultSolrCore);
 
-        const {"data":{"status":coresStatusInfo}} = await axios.get(solrUrl + "admin/cores?indexInfo=false", {
+        const {"data":{"status":coresStatusInfo}} = await solrInstance.get("admin/cores?indexInfo=false", {
             headers: {
                 "Content-Type": "application/json;charset=UTF-8"
             }
@@ -56,9 +60,15 @@ const solrApp = (() => {
         return coresSet;
     }
 
-    const solrUrl = config.get("solr.url");
-    const defaultSolrCore = config.get("solr.core");
+    const solrUrl = config.get("solr.url"),
+        defaultSolrCore = config.get("solr.core");
+    
     const wsName = config.get("digit.wsName");
+
+    const solrInstance = axios.create({
+        "baseURL": solrUrl,
+        "timeout": 60000
+    });
 
     return {
         getDocsCountByEntityId: async function(entityId, coreName) {
@@ -103,7 +113,7 @@ const orientApp = (() => {
         const userCookie = await CookieManager.getActualCookie();
         const {
             "data":{"result":searchResult}
-        } = await axios.post(orientUrl + `command/${orientDBName}/sql/-/20?format=rid,type,version,class,graph`, queryString, {
+        } = await orientInstance.post(`command/${orientDBName}/sql/-/20?format=rid,type,version,class,graph`, queryString, {
             headers: {
                 "Content-Type": "application/json;charset=UTF-8",
                 "Cookie": userCookie
@@ -118,9 +128,14 @@ const orientApp = (() => {
         orientUsername = config.get("orientdb.username"),
         orientPassword = config.get("orientdb.password");
 
+    const orientInstance = axios.create({
+        "baseURL": orientUrl,
+        "timeout": 60000
+    });
+
     const CookieManager = new globalCookieManager({
-        "loginFunction": async function(){
-            const loginData = await axios.get(orientUrl + "connect/" + orientDBName, {
+        "loginFunction": async function loginFunction(){
+            const loginData = await orientInstance.get("connect/" + orientDBName, {
                 headers: {
                     "Content-Type": "application/json;charset=UTF-8",
                     "Authorization": "Basic " + btoa(orientUsername + ":" + orientPassword)
@@ -132,22 +147,29 @@ const orientApp = (() => {
 
             return UserCookie;
         }, 
-        "checkCookieFunction": async function(){
+        "checkCookieFunction": async function checkCookieFunction(){
             let checkCookieResult = true;
             
             try {
                 const cookie = CookieManager.getCookie();
                 const searchString = "SELECT count(*) FROM OUser";
-                await axios.post(orientUrl + `command/${orientDBName}/sql/-/20?format=rid,type,version,class,graph`, searchString, {
+                await orientInstance.post(`command/${orientDBName}/sql/-/20?format=rid,type,version,class,graph`, searchString, {
                     headers: {
                         "Content-Type": "application/json;charset=UTF-8",
                         "Cookie": cookie
                     }
                 });
             } catch (err) {
-                checkCookieResult = false;
-            }
+                if (CONNECTION_ERROR_CODES.includes(err.code)) {
+                    logger.warn("There are connection troubles...");
 
+                    return await checkCookieFunction.apply(this, arguments);
+                } else {
+                    logger.error("Error while evaluating checkCookieFunction from orient's inctance: " + err);
+
+                    checkCookieResult = false;
+                }
+            }
             return checkCookieResult;
         }
     });
@@ -202,6 +224,8 @@ const port = config.get("application.port");
 app.listen(port);
 
 logger.info(`WebModule enabled on port: ${port}`);
+
+const CONNECTION_ERROR_CODES = ["ECONNABORTED", "ECONNRESET"];
 
 app.get("/", async (req, res) => {
     try {
@@ -271,10 +295,22 @@ app.get("/checkAll", async (req, res) => {
         if (entityData && !entityData.checked) {
             let solrCoreName = entityData.solrCore;
 
-            let [solrCount, orientCount] = await Promise.all([
-                solrApp.getDocsCountByEntityId(entityId, solrCoreName),
-                orientApp.getDocsCountByClassName(entityData.dbname)
-            ]);
+            let solrCount = 0, orientCount = 0;
+            try {
+                [solrCount, orientCount] = await Promise.all([
+                    solrApp.getDocsCountByEntityId(entityId, solrCoreName),
+                    orientApp.getDocsCountByClassName(entityData.dbname)
+                ]);
+            } catch (err) {
+                if (CONNECTION_ERROR_CODES.includes(err.code)) {
+                    logger.warn("There are connection troubles...");
+
+                    await processEntityById.apply(this, arguments);
+                    return;
+                } else {
+                    throw err;
+                }
+            }
             entityData.solrCount = solrCount;
             entityData.orientCount = orientCount;
             
@@ -289,10 +325,22 @@ app.get("/checkAll", async (req, res) => {
     async function processWorkflowById(workflowId, workflowsMap){
         const workflowData = workflowsMap.get(workflowId);
         if (workflowData && !workflowData.checked) {
-            let [solrCount, orientCount] = await Promise.all([
-                solrApp.getDocsCountByWorkflowId(workflowId),
-                orientApp.getDocsCountByWorkflowId(workflowId)
-            ]);
+            let solrCount = 0, orientCount = 0;
+            try {
+                [solrCount, orientCount] = await Promise.all([
+                    solrApp.getDocsCountByWorkflowId(workflowId),
+                    orientApp.getDocsCountByWorkflowId(workflowId)
+                ]);
+            } catch (err) {
+                if (CONNECTION_ERROR_CODES.includes(err.code)) {
+                    logger.warn("There are connection troubles...");
+
+                    await processWorkflowById.apply(this, arguments);
+                    return;
+                } else {
+                    throw err;
+                }
+            }
             workflowData.solrCount = solrCount;
             workflowData.orientCount = orientCount;
             
@@ -421,8 +469,20 @@ app.get("/checkAll", async (req, res) => {
             formDatas = [], formsDataReceivedAmount = 0;
         for (let i = 0; i < FORM_PROCESSING_FLOWS_COUNT; i++) {
             let newFlow = startFlow({
-                execFunction: async function(formObjectId) {
-                    let formData = await digitApp.getFormData(formObjectId);
+                execFunction: async function getFormDataById(formObjectId) {
+                    let formData;
+                    try {
+                        formData = await digitApp.getFormData(formObjectId);
+                    } catch (err) {
+                        if (CONNECTION_ERROR_CODES.includes(err.code)) {
+                            logger.warn("There are connection troubles...");
+
+                            await getFormDataById.apply(this, arguments);
+                            return;
+                        } else {
+                            throw err;
+                        }
+                    }
                     formDatas.push(formData);
                     
                     formsDataReceivedAmount++;
@@ -468,8 +528,20 @@ app.get("/checkAll", async (req, res) => {
             visDatas = [], visesDataReceivedAmount = 0;
         for (let i = 0; i < VIS_PROCESSING_FLOWS_COUNT; i++) {
             let newFlow = startFlow({
-                execFunction: async function(visObjectId) {
-                    let visData = await digitApp.getVisData(visObjectId);
+                execFunction: async function getVisDataById(visObjectId) {
+                    let visData;
+                    try {
+                        visData = await digitApp.getVisData(visObjectId);
+                    } catch (err) {
+                        if (CONNECTION_ERROR_CODES.includes(err.code)) {
+                            logger.warn("There are connection troubles...");
+
+                            await getVisDataById.apply(this, arguments);
+                            return;
+                        } else {
+                            throw err;
+                        }
+                    }
                     visDatas.push(visData);
                     
                     visesDataReceivedAmount++;
