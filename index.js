@@ -10,6 +10,10 @@ const config = require("config");
 const {DigitApp} = require("digitjs");
 const btoa = require('btoa');
 
+console.log = console.info = logger.info.bind(logger);
+console.warn = logger.warn.bind(logger);
+console.error = logger.error.bind(logger);
+
 const digitAppUrl = config.get("digit.url"),
     digitUsername = config.get("digit.username"),
     digitPassword = config.get("digit.password");
@@ -130,7 +134,7 @@ const orientApp = (() => {
     });
 
     const CookieManager = new globalCookieManager({
-        "loginFunction": async function(){
+        "loginFunction": async function loginFunction(){
             const loginData = await orientInstance.get("connect/" + orientDBName, {
                 headers: {
                     "Content-Type": "application/json;charset=UTF-8",
@@ -143,7 +147,7 @@ const orientApp = (() => {
 
             return UserCookie;
         }, 
-        "checkCookieFunction": async function(){
+        "checkCookieFunction": async function checkCookieFunction(){
             let checkCookieResult = true;
             
             try {
@@ -156,9 +160,16 @@ const orientApp = (() => {
                     }
                 });
             } catch (err) {
-                checkCookieResult = false;
-            }
+                if (CONNECTION_ERROR_CODES.includes(err.code)) {
+                    logger.warn("There are connection troubles...");
 
+                    return await checkCookieFunction.apply(this, arguments);
+                } else {
+                    logger.error("Error while evaluating checkCookieFunction from orient's inctance: " + err);
+
+                    checkCookieResult = false;
+                }
+            }
             return checkCookieResult;
         }
     });
@@ -213,6 +224,8 @@ const port = config.get("application.port");
 app.listen(port);
 
 logger.info(`WebModule enabled on port: ${port}`);
+
+const CONNECTION_ERROR_CODES = ["ECONNABORTED", "ECONNRESET"];
 
 app.get("/", async (req, res) => {
     try {
@@ -289,9 +302,13 @@ app.get("/checkAll", async (req, res) => {
                     orientApp.getDocsCountByClassName(entityData.dbname)
                 ]);
             } catch (err) {
-                if (["ECONNABORTED", "ECONNRESET"].includes(err.code)) {
-                    await processEntityById.apply(null, arguments);
+                if (CONNECTION_ERROR_CODES.includes(err.code)) {
+                    logger.warn("There are connection troubles...");
+
+                    await processEntityById.apply(this, arguments);
                     return;
+                } else {
+                    throw err;
                 }
             }
             entityData.solrCount = solrCount;
@@ -308,10 +325,22 @@ app.get("/checkAll", async (req, res) => {
     async function processWorkflowById(workflowId, workflowsMap){
         const workflowData = workflowsMap.get(workflowId);
         if (workflowData && !workflowData.checked) {
-            let [solrCount, orientCount] = await Promise.all([
-                solrApp.getDocsCountByWorkflowId(workflowId),
-                orientApp.getDocsCountByWorkflowId(workflowId)
-            ]);
+            let solrCount = 0, orientCount = 0;
+            try {
+                [solrCount, orientCount] = await Promise.all([
+                    solrApp.getDocsCountByWorkflowId(workflowId),
+                    orientApp.getDocsCountByWorkflowId(workflowId)
+                ]);
+            } catch (err) {
+                if (CONNECTION_ERROR_CODES.includes(err.code)) {
+                    logger.warn("There are connection troubles...");
+
+                    await processWorkflowById.apply(this, arguments);
+                    return;
+                } else {
+                    throw err;
+                }
+            }
             workflowData.solrCount = solrCount;
             workflowData.orientCount = orientCount;
             
@@ -440,8 +469,20 @@ app.get("/checkAll", async (req, res) => {
             formDatas = [], formsDataReceivedAmount = 0;
         for (let i = 0; i < FORM_PROCESSING_FLOWS_COUNT; i++) {
             let newFlow = startFlow({
-                execFunction: async function(formObjectId) {
-                    let formData = await digitApp.getFormData(formObjectId);
+                execFunction: async function getFormDataById(formObjectId) {
+                    let formData;
+                    try {
+                        formData = await digitApp.getFormData(formObjectId);
+                    } catch (err) {
+                        if (CONNECTION_ERROR_CODES.includes(err.code)) {
+                            logger.warn("There are connection troubles...");
+
+                            await getFormDataById.apply(this, arguments);
+                            return;
+                        } else {
+                            throw err;
+                        }
+                    }
                     formDatas.push(formData);
                     
                     formsDataReceivedAmount++;
@@ -487,8 +528,20 @@ app.get("/checkAll", async (req, res) => {
             visDatas = [], visesDataReceivedAmount = 0;
         for (let i = 0; i < VIS_PROCESSING_FLOWS_COUNT; i++) {
             let newFlow = startFlow({
-                execFunction: async function(visObjectId) {
-                    let visData = await digitApp.getVisData(visObjectId);
+                execFunction: async function getVisDataById(visObjectId) {
+                    let visData;
+                    try {
+                        visData = await digitApp.getVisData(visObjectId);
+                    } catch (err) {
+                        if (CONNECTION_ERROR_CODES.includes(err.code)) {
+                            logger.warn("There are connection troubles...");
+
+                            await getVisDataById.apply(this, arguments);
+                            return;
+                        } else {
+                            throw err;
+                        }
+                    }
                     visDatas.push(visData);
                     
                     visesDataReceivedAmount++;
