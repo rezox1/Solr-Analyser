@@ -10,6 +10,10 @@ const config = require("config");
 const {DigitApp} = require("digitjs");
 const btoa = require('btoa');
 
+const dayjs = require("dayjs");
+const customParseFormat = require('dayjs/plugin/customParseFormat');
+dayjs.extend(customParseFormat);
+
 console.log = console.info = logger.info.bind(logger);
 console.warn = logger.warn.bind(logger);
 console.error = logger.error.bind(logger);
@@ -288,68 +292,6 @@ app.get("/checkAll", async (req, res) => {
             for (let element of visElement.elements) {
                 await processVisElement(element, entitiesMap, workflowsMap);
             }
-        }
-    }
-    async function processEntityById(entityId, entitiesMap){
-        const entityData = entitiesMap.get(entityId);
-        if (entityData && !entityData.checked) {
-            let solrCoreName = entityData.solrCore;
-
-            let solrCount = 0, orientCount = 0;
-            try {
-                [solrCount, orientCount] = await Promise.all([
-                    solrApp.getDocsCountByEntityId(entityId, solrCoreName),
-                    orientApp.getDocsCountByClassName(entityData.dbname)
-                ]);
-            } catch (err) {
-                if (CONNECTION_ERROR_CODES.includes(err.code)) {
-                    logger.warn("There are connection troubles...");
-
-                    await processEntityById.apply(this, arguments);
-                    return;
-                } else {
-                    throw err;
-                }
-            }
-            entityData.solrCount = solrCount;
-            entityData.orientCount = orientCount;
-            
-            if (solrCount !== orientCount) {
-                entityData.hasDifference = true;
-                entityData.delta = solrCount - orientCount;
-            }
-
-            entityData.checked = true;
-        }
-    }
-    async function processWorkflowById(workflowId, workflowsMap){
-        const workflowData = workflowsMap.get(workflowId);
-        if (workflowData && !workflowData.checked) {
-            let solrCount = 0, orientCount = 0;
-            try {
-                [solrCount, orientCount] = await Promise.all([
-                    solrApp.getDocsCountByWorkflowId(workflowId),
-                    orientApp.getDocsCountByWorkflowId(workflowId)
-                ]);
-            } catch (err) {
-                if (CONNECTION_ERROR_CODES.includes(err.code)) {
-                    logger.warn("There are connection troubles...");
-
-                    await processWorkflowById.apply(this, arguments);
-                    return;
-                } else {
-                    throw err;
-                }
-            }
-            workflowData.solrCount = solrCount;
-            workflowData.orientCount = orientCount;
-            
-            if (solrCount !== orientCount) {
-                workflowData.hasDifference = true;
-                workflowData.delta = solrCount - orientCount;
-            }
-
-            workflowData.checked = true;
         }
     }
     //типы элементов на форме
@@ -671,9 +613,11 @@ app.get("/getEntitiesList", async (req, res) => {
         const entitiesList = [];
 
         for (let [entityId, entityData] of EntitiesMap) {
-            if (entityData.checked && entityData.solrCount > 0) {
-                let item = {}
-                item[entityData.umlName] = entityId;
+            if (entityData.checked) {
+                let item = {
+                	"entityId": entityId,
+                	"umlName": entityData.umlName
+                }
                 entitiesList.push(item);
             }
         }
@@ -685,6 +629,160 @@ app.get("/getEntitiesList", async (req, res) => {
         logger.error(err);
     }
 });
+
+const SET_TIMEOUT_LIMIT = 2147483647;
+
+app.get("/syncEntity/:entityId", async (req, res) => {
+    async function getTransactionPercent(transactionId){
+		try {
+			let {"percent": transactionPercent} = await digitApp.getTransactionData(transactionId);
+			return transactionPercent;
+		} catch (err) {
+			if (CONNECTION_ERROR_CODES.includes(err.code)) {
+				logger.warn("There are connection troubles...");
+
+				transactionPercent = await getTransactionPercent.apply(this, arguments);
+				return transactionPercent;
+			} else {
+				throw err;
+			}
+		}
+	}
+
+    try {
+        const entityId = req.params.entityId;
+        if (!entityId) {
+        	throw new Error("entityId is not defined");
+        }
+        const {"umlName": entityName} = EntitiesMap.get(entityId);
+
+        let startAt = req.query.startAt;
+        if (startAt) {
+        	let startAtDate = dayjs(startAt, "DD.MM.YYYY HH:mm");
+        	if (startAtDate.isValid()) {
+        		let currentDate = dayjs();
+        		if (currentDate.isBefore(startAtDate)) {
+        			let datesDifference = startAtDate.diff(currentDate);
+        			if (datesDifference > SET_TIMEOUT_LIMIT) {
+        				throw new Error("Synchronization date is too big");
+        			} else {
+        				logger.info('Schedule synchronization of entity "' + entityName + '" at ' + startAt);
+
+        				res.sendStatus(200);
+
+        				await sleep(datesDifference);
+        			}
+        		} else {
+        			logger.info('Synchronization of "' + entityName + '" will be started immediately');
+        		}
+        	} else {
+        		throw new Error("Incorrect date format");
+        	}
+        }
+
+        const transactionId = await digitApp.syncEntity(entityId);
+		
+		logger.info('Start synchronization of "' + entityName + '"');
+		if (!res.headersSent) {
+			res.sendStatus(200);
+		}
+
+		try {
+			let transactionInProgress = true;
+			while (transactionInProgress) {
+				let transactionPercent = await getTransactionPercent(transactionId);
+				if (transactionPercent >= 100) {
+					transactionInProgress = false;
+
+					let entityData = EntitiesMap.get(entityId);
+					//to repeat processing
+					entityData.checked = false;
+					await processEntityById(entityId, EntitiesMap);
+
+					logger.info('Synchronization of "' + entityName + '" is completed');
+				} else {
+					if (transactionPercent > 0) {
+						logger.info('Current transaction percent for "' + entityName + '" is ' + transactionPercent);
+					}
+
+					await sleep(10000);
+				}
+			}
+		} catch (err) {
+			logger.error(err);
+		}
+    } catch (err) {
+        res.sendStatus(400);
+
+        logger.error(err);
+    }
+});
+
+async function processEntityById(entityId, entitiesMap){
+    const entityData = entitiesMap.get(entityId);
+    if (entityData && !entityData.checked) {
+        let solrCoreName = entityData.solrCore;
+
+        let solrCount = 0, orientCount = 0;
+        try {
+            [solrCount, orientCount] = await Promise.all([
+                solrApp.getDocsCountByEntityId(entityId, solrCoreName),
+                orientApp.getDocsCountByClassName(entityData.dbname)
+            ]);
+        } catch (err) {
+            if (CONNECTION_ERROR_CODES.includes(err.code)) {
+                logger.warn("There are connection troubles...");
+
+                await processEntityById.apply(this, arguments);
+                return;
+            } else {
+                throw err;
+            }
+        }
+        entityData.solrCount = solrCount;
+        entityData.orientCount = orientCount;
+        entityData.hasDifference = false;
+        entityData.delta = 0;
+        
+        if (solrCount !== orientCount) {
+            entityData.hasDifference = true;
+            entityData.delta = solrCount - orientCount;
+        }
+
+        entityData.checked = true;
+    }
+}
+
+async function processWorkflowById(workflowId, workflowsMap){
+    const workflowData = workflowsMap.get(workflowId);
+    if (workflowData && !workflowData.checked) {
+        let solrCount = 0, orientCount = 0;
+        try {
+            [solrCount, orientCount] = await Promise.all([
+                solrApp.getDocsCountByWorkflowId(workflowId),
+                orientApp.getDocsCountByWorkflowId(workflowId)
+            ]);
+        } catch (err) {
+            if (CONNECTION_ERROR_CODES.includes(err.code)) {
+                logger.warn("There are connection troubles...");
+
+                await processWorkflowById.apply(this, arguments);
+                return;
+            } else {
+                throw err;
+            }
+        }
+        workflowData.solrCount = solrCount;
+        workflowData.orientCount = orientCount;
+        
+        if (solrCount !== orientCount) {
+            workflowData.hasDifference = true;
+            workflowData.delta = solrCount - orientCount;
+        }
+
+        workflowData.checked = true;
+    }
+}
 
 function globalCookieManager({loginFunction, checkCookieFunction}){
     async function refreshCookie() {
@@ -722,4 +820,8 @@ async function startFlow({execFunction,iterator}){
             isRunning = false;
         }
     }
+}
+
+function sleep(ms) {
+	return new Promise(resolve => setTimeout(resolve, ms));
 }
