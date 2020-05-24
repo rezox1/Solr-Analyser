@@ -77,6 +77,11 @@ const WorkflowsMap = new Map();
 //map object for storing entities information
 const EntitiesMap = new Map();
 
+//map object for storing common workflows information (like total number of objects etc.)
+const CommonWorkflowsInfoMap = new Map();
+//map object for storing common entities information (like total number of objects etc.)
+const CommonEntitiesInfoMap = new Map();
+
 app.get("/checkAll", async (req, res) => {
     async function processFormElement(element, entitiesMap, linksMap){
         const elementType = element.objectType;
@@ -133,6 +138,17 @@ app.get("/checkAll", async (req, res) => {
         });
 
         logger.info("Let's scan " + digitAppUrl + " for missed solr documents");
+
+        logger.info("Trying to get total count of objects...");
+        
+        const [totalWorkflowDocsCount, totalEntityDocsCount] = await Promise.all([
+        	solrApp.getTotalDocsCountByWorkflows(),
+        	solrApp.getTotalDocsCountByEntities()
+        ]);
+        CommonWorkflowsInfoMap.set("totalDocsCount", totalWorkflowDocsCount);
+        CommonEntitiesInfoMap.set("totalDocsCount", totalEntityDocsCount);
+
+        logger.info("Finished getting total count of objects");
 
         logger.info("Trying to get UMLSchema...");
         const {packages,entities} = await digitApp.getUMLSchema();
@@ -394,14 +410,24 @@ app.get("/getLastResult", async (req, res) => {
 app.get("/getSolrEntitiesMap", async (req, res) => {
     try {
         const resultObject = {}
-        resultObject.totalDocsCount = await solrApp.getTotalDocsCountByEntities();
+        let totalDocsCount = CommonEntitiesInfoMap.get("totalDocsCount");
+        if (totalDocsCount) {
+        	resultObject.totalDocsCount = totalDocsCount;
+        } else {
+        	resultObject.totalDocsCount = 0;
+        }
 
+        let customSolrCore;
         const entitiesData = {}
         for (let [entityId, entityData] of EntitiesMap) {
             if (entityData.checked) {
                 entitiesData[entityId] = {
                     "umlName": entityData.umlName,
                     "solrCount": entityData.solrCount
+                }
+                customSolrCore = entityData.solrCore;
+                if (customSolrCore) {
+                	entitiesData[entityId].customSolrCore = wsName + "_" + customSolrCore;
                 }
             }
         }
@@ -418,7 +444,12 @@ app.get("/getSolrEntitiesMap", async (req, res) => {
 app.get("/getSolrWorkflowsMap", async (req, res) => {
     try {
         const resultObject = {}
-        resultObject.totalDocsCount = await solrApp.getTotalDocsCountByWorkflows();
+        let totalDocsCount = CommonWorkflowsInfoMap.get("totalDocsCount");
+        if (totalDocsCount) {
+        	resultObject.totalDocsCount = totalDocsCount;
+        } else {
+        	resultObject.totalDocsCount = 0;
+        }
 
         const workflowsData = {}
         for (let [workflowId, workflowData] of WorkflowsMap) {
@@ -552,29 +583,6 @@ app.get("/syncEntity/:entityId", async (req, res) => {
 const FullCheckEntitiesMap = new Map();
 
 app.get("/startFullCheck/:entityId", async (req, res) => {
-    async function getOrientAndSolrDocsCount(entityId){
-    	try {
-            const entityData = EntitiesMap.get(entityId);
-
-            let [solrCount, orientCount] = await Promise.all([
-                solrApp.getDocsCountByEntityId(entityId, entityData.solrCore),
-                orientApp.getDocsCountByClassName(entityData.dbname)
-            ]);
-            return {
-            	"solrCount": solrCount,
-            	"orientCount": orientCount
-            }
-        } catch (err) {
-            if (CONNECTION_ERROR_CODES.includes(err.code)) {
-                logger.warn("There are connection troubles...");
-
-                let docsCountData = await getOrientAndSolrDocsCount.apply(this, arguments);
-                return docsCountData;
-            } else {
-                throw err;
-            }
-        }
-    }
     function* getProcessedCount(totalCount, processingLimit){
     	let processedCount = 0;
     	while (processedCount < totalCount) {
@@ -598,7 +606,11 @@ app.get("/startFullCheck/:entityId", async (req, res) => {
         res.sendStatus(200);
 
         try {
-        	let {solrCount, orientCount} = await getOrientAndSolrDocsCount(entityId);
+        	entityData.checked = false;
+			//refresh data about solr and orient documents count
+			await processEntityById(entityId, EntitiesMap);
+
+        	let {solrCount, orientCount} = entityData;
 
 			const orientDocsMap = new Map();
 			const solrDocsMap = new Map();
@@ -741,13 +753,23 @@ async function processEntityById(entityId, entitiesMap){
     const entityData = entitiesMap.get(entityId);
     if (entityData && !entityData.checked) {
         let solrCoreName = entityData.solrCore;
-
-        let solrCount = 0, orientCount = 0;
         try {
-            [solrCount, orientCount] = await Promise.all([
+            let [solrCount, orientCount] = await Promise.all([
                 solrApp.getDocsCountByEntityId(entityId, solrCoreName),
                 orientApp.getDocsCountByClassName(entityData.dbname)
             ]);
+
+            entityData.solrCount = solrCount;
+	        entityData.orientCount = orientCount;
+	        entityData.hasDifference = false;
+	        entityData.delta = 0;
+	        
+	        if (solrCount !== orientCount) {
+	            entityData.hasDifference = true;
+	            entityData.delta = solrCount - orientCount;
+	        }
+
+	        entityData.checked = true;
         } catch (err) {
             if (CONNECTION_ERROR_CODES.includes(err.code)) {
                 logger.warn("There are connection troubles...");
@@ -757,18 +779,7 @@ async function processEntityById(entityId, entitiesMap){
             } else {
                 throw err;
             }
-        }
-        entityData.solrCount = solrCount;
-        entityData.orientCount = orientCount;
-        entityData.hasDifference = false;
-        entityData.delta = 0;
-        
-        if (solrCount !== orientCount) {
-            entityData.hasDifference = true;
-            entityData.delta = solrCount - orientCount;
-        }
-
-        entityData.checked = true;
+        }   
     }
 }
 
