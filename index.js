@@ -1,22 +1,23 @@
 //import log4j subsystem
 const logger = require("./core/logger.js");
 
+console.log = console.info = logger.info.bind(logger);
+console.warn = logger.warn.bind(logger);
+console.error = logger.error.bind(logger);
+
 const express = require('express');
 const cors = require('cors');
 const app = express();
 
-const axios = require('axios');
 const config = require("config");
+
 const {DigitApp} = require("digitjs");
-const btoa = require('btoa');
+const {SolrApp} = require("./core/solr.js");
+const {OrientDBApp} = require("./core/orientdb.js");
 
 const dayjs = require("dayjs");
 const customParseFormat = require('dayjs/plugin/customParseFormat');
 dayjs.extend(customParseFormat);
-
-console.log = console.info = logger.info.bind(logger);
-console.warn = logger.warn.bind(logger);
-console.error = logger.error.bind(logger);
 
 const digitAppUrl = config.get("digit.url"),
     digitUsername = config.get("digit.username"),
@@ -28,197 +29,27 @@ const digitApp = new DigitApp({
     "password": digitPassword
 });
 
-const solrApp = (() => {
-    async function makeSolrQuery(queryString, coreName){
-        let solrCore;
-        if (coreName && coreName !== defaultSolrCore) {
-            solrCore = wsName + "_" + coreName;
-        } else {
-            solrCore = defaultSolrCore;
-        }
+const solrUrl = config.get("solr.url"),
+	defaultSolrCore = config.get("solr.core"),
+	wsName = config.get("digit.wsName");
 
-        const {data:{response}} = await solrInstance.get(solrCore + "/select?q=" + queryString + "&rows=0&start=0", {
-            headers: {
-                "Content-Type": "application/json;charset=UTF-8"
-            }
-        });
+const solrApp = new SolrApp({
+	"solrUrl": solrUrl,
+	"defaultSolrCore": defaultSolrCore,
+	"wsName": wsName
+});
 
-        return response;
-    }
-    async function getCoresSet(){
-        const coresSet = new Set();
-        coresSet.add(defaultSolrCore);
+const orientUrl = config.get("orientdb.url"),
+	orientDBName = config.get("orientdb.dbname"),
+	orientUsername = config.get("orientdb.username"),
+	orientPassword = config.get("orientdb.password");
 
-        const {"data":{"status":coresStatusInfo}} = await solrInstance.get("admin/cores?indexInfo=false", {
-            headers: {
-                "Content-Type": "application/json;charset=UTF-8"
-            }
-        });
-        for (let coreName in coresStatusInfo) {
-            if (coreName.startsWith(wsName) && coreName !== defaultSolrCore) {
-                let internalCoreName = coreName.replace(wsName + "_", "");
-                coresSet.add(internalCoreName);
-            }
-        }
-
-        return coresSet;
-    }
-
-    const solrUrl = config.get("solr.url"),
-        defaultSolrCore = config.get("solr.core");
-    
-    const wsName = config.get("digit.wsName");
-
-    const solrInstance = axios.create({
-        "baseURL": solrUrl,
-        "timeout": 60000
-    });
-
-    return {
-        getDocsCountByEntityId: async function(entityId, coreName) {
-            const queryString = "entityId_sm:" + entityId;
-            const {numFound} = await makeSolrQuery(queryString, coreName);
-
-            return numFound;
-        },
-        getDocsCountByWorkflowId: async function(workflowId) {
-            let totalDocsCount = 0;
-
-            const queryString = "workflowId_s:" + workflowId;
-            const {numFound} = await makeSolrQuery(queryString);
-            totalDocsCount += numFound;
-
-            return totalDocsCount;
-        },
-        getTotalDocsCountByEntities: async function() {
-            let totalDocsCount = 0;
-
-            const queryString = "entityId_sm:[* TO *] && -(workflowId_s:[* TO *])";
-
-            const allSolrCores = await getCoresSet();
-            for (let solrCore of allSolrCores) {
-                let {numFound} = await makeSolrQuery(queryString, solrCore);
-                totalDocsCount += numFound; 
-            }
-
-            return totalDocsCount;
-        },
-        getTotalDocsCountByWorkflows: async function() {
-            const queryString = "-(entityId_sm:[* TO *]) && workflowId_s:[* TO *]";
-            const {numFound} = await makeSolrQuery(queryString);
-
-            return numFound;
-        }
-    }
-})();
-
-const orientApp = (() => {
-    async function makeQuery(queryString){
-        const userCookie = await CookieManager.getActualCookie();
-        const {
-            "data":{"result":searchResult}
-        } = await orientInstance.post(`command/${orientDBName}/sql/-/20?format=rid,type,version,class,graph`, queryString, {
-            headers: {
-                "Content-Type": "application/json;charset=UTF-8",
-                "Cookie": userCookie
-            }
-        });
-
-        return searchResult;
-    }
-
-    const orientUrl = config.get("orientdb.url"),
-        orientDBName = config.get("orientdb.dbname"),
-        orientUsername = config.get("orientdb.username"),
-        orientPassword = config.get("orientdb.password");
-
-    const orientInstance = axios.create({
-        "baseURL": orientUrl,
-        "timeout": 60000
-    });
-
-    const CookieManager = new globalCookieManager({
-        "loginFunction": async function loginFunction(){
-            const loginData = await orientInstance.get("connect/" + orientDBName, {
-                headers: {
-                    "Content-Type": "application/json;charset=UTF-8",
-                    "Authorization": "Basic " + btoa(orientUsername + ":" + orientPassword)
-                }
-            });
-
-            let RawUserCookie = loginData.headers["set-cookie"][0],
-                UserCookie = RawUserCookie.substring(0, RawUserCookie.indexOf(";"));
-
-            return UserCookie;
-        }, 
-        "checkCookieFunction": async function checkCookieFunction(){
-            let checkCookieResult = true;
-            
-            try {
-                const cookie = CookieManager.getCookie();
-                const searchString = "SELECT count(*) FROM OUser";
-                await orientInstance.post(`command/${orientDBName}/sql/-/20?format=rid,type,version,class,graph`, searchString, {
-                    headers: {
-                        "Content-Type": "application/json;charset=UTF-8",
-                        "Cookie": cookie
-                    }
-                });
-            } catch (err) {
-                if (CONNECTION_ERROR_CODES.includes(err.code)) {
-                    logger.warn("There are connection troubles...");
-
-                    return await checkCookieFunction.apply(this, arguments);
-                } else {
-                    logger.error("Error while evaluating checkCookieFunction from orient's inctance: " + err);
-
-                    checkCookieResult = false;
-                }
-            }
-            return checkCookieResult;
-        }
-    });
-
-    return {
-        getDBNamesMap: async function() {
-            const searchString = `select objectId, properties.dbName as dbName from (traverse * from (select entities from journalspec where name="UmlJournal")) where @class="EntitySpec" and properties.dbName is not null and properties.dbName <> "" limit -1`;
-
-            const searchResult = await makeQuery(searchString);
-
-            const DBNamesMap = new Map();
-
-            for (let entityData of searchResult) {
-                DBNamesMap.set(entityData.objectId, entityData.dbName);
-            }
-
-            return DBNamesMap;
-        },
-        getCustomSolrCoreEntitiesMap: async function() {
-            const searchString = `select objectId, properties.solrCore as solrCore from (traverse * from (select entities from journalspec where name="UmlJournal")) where @class="EntitySpec" and properties.solrCore is not null and properties.solrCore <> "" limit -1`;
-            
-            const searchResult = await makeQuery(searchString);
-
-            const customSolrCoreEntitiesMap = new Map();
-
-            for (let entityData of searchResult) {
-                customSolrCoreEntitiesMap.set(entityData.objectId, entityData.solrCore);
-            }
-
-            return customSolrCoreEntitiesMap;
-        },
-        getDocsCountByClassName: async function(entityClassName) {
-            const searchString = "SELECT count(*) FROM " + entityClassName + " WHERE (deleted = false or deleted is null)";
-
-            const [searchResult] = await makeQuery(searchString);
-            return searchResult.count;
-        },
-        getDocsCountByWorkflowId: async function(workflowId) {
-            const searchString = "SELECT count(*) FROM ProcessScope where workflow.objectId = \"" + workflowId + "\" AND processInstanceState <> \"TERMINATED\"";
-
-            const [searchResult] = await makeQuery(searchString);
-            return searchResult.count;
-        }
-    }
-})();
+const orientApp = new OrientDBApp({
+	"orientUrl": orientUrl,
+	"orientDBName": orientDBName,
+	"orientUsername": orientUsername,
+	"orientPassword": orientPassword
+});
 
 app.use(express.json()) // for parsing application/json
 app.use(express.urlencoded({ extended: true })) // for parsing application/x-www-form-urlencoded
@@ -616,7 +447,7 @@ app.get("/getEntitiesList", async (req, res) => {
             if (entityData.checked) {
                 let item = {
                 	"entityId": entityId,
-                	"umlName": entityData.umlName
+                	"umlName": entityData.umlName + " - " + entityData.orientCount.toFixed() + "/" + entityData.solrCount.toFixed()
                 }
                 entitiesList.push(item);
             }
@@ -718,6 +549,194 @@ app.get("/syncEntity/:entityId", async (req, res) => {
     }
 });
 
+const FullCheckEntitiesMap = new Map();
+
+app.get("/startFullCheck/:entityId", async (req, res) => {
+    async function getOrientAndSolrDocsCount(entityId){
+    	try {
+            const entityData = EntitiesMap.get(entityId);
+
+            let [solrCount, orientCount] = await Promise.all([
+                solrApp.getDocsCountByEntityId(entityId, entityData.solrCore),
+                orientApp.getDocsCountByClassName(entityData.dbname)
+            ]);
+            return {
+            	"solrCount": solrCount,
+            	"orientCount": orientCount
+            }
+        } catch (err) {
+            if (CONNECTION_ERROR_CODES.includes(err.code)) {
+                logger.warn("There are connection troubles...");
+
+                let docsCountData = await getOrientAndSolrDocsCount.apply(this, arguments);
+                return docsCountData;
+            } else {
+                throw err;
+            }
+        }
+    }
+    function* getProcessedCount(totalCount, processingLimit){
+    	let processedCount = 0;
+    	while (processedCount < totalCount) {
+    		yield processedCount;
+
+    		processedCount += processingLimit;
+    	}
+    }
+
+    try {
+    	const entityId = req.params.entityId;
+        if (!entityId) {
+        	throw new Error("entityId is not defined");
+        }
+        const entityData = EntitiesMap.get(entityId);
+        if (!entityData) {
+        	throw new Error("Unknown entityId: " + entityId);
+        }
+
+        logger.info("Start full check of " + entityData.umlName);
+        res.sendStatus(200);
+
+        try {
+        	let {solrCount, orientCount} = await getOrientAndSolrDocsCount(entityId);
+
+			const orientDocsMap = new Map();
+			const solrDocsMap = new Map();
+
+			const docsGettingFlows = [];
+	        
+			const SOLR_GETTING_LIMIT = 10000;
+	        const solrDocsGettingFlow = startFlow({
+	            execFunction: async function getSolrDocsVersions(skipCount) {
+	                try {
+	                    let docsVersionsData = await solrApp.getDocsVersions({
+	                    	"entityId": entityId,
+	                    	"coreName": entityData.solrCore,
+	                    	"limit": SOLR_GETTING_LIMIT,
+	                    	"skip": skipCount
+	                    });
+	                    for (let documentData of docsVersionsData) {
+	                    	solrDocsMap.set(documentData.objectId, documentData.version);
+	                    }
+
+	                    logger.info(`${skipCount + docsVersionsData.length} of ${solrCount} solr documents received`);
+	                } catch (err) {
+	                    if (CONNECTION_ERROR_CODES.includes(err.code)) {
+	                        logger.warn("There are connection troubles...");
+
+	                        await getSolrDocsVersions.apply(this, arguments);
+	                        return;
+	                    } else {
+	                        throw err;
+	                    }
+	                }
+	            },
+	            iterator: getProcessedCount(solrCount, SOLR_GETTING_LIMIT)
+	        });
+	        docsGettingFlows.push(solrDocsGettingFlow);
+	        
+	        const ORIENT_GETTING_LIMIT = 10000;
+	        const orientDocsGettingFlow = startFlow({
+	            execFunction: async function getOrientDocsVersions(skipCount) {
+	                try {
+	                    let docsVersionsData = await orientApp.getDocsVersions({
+	                    	"entityClassName": entityData.dbname,
+	                    	"limit": ORIENT_GETTING_LIMIT,
+	                    	"skip": skipCount
+	                    });
+	                    for (let documentData of docsVersionsData) {
+	                    	orientDocsMap.set(documentData.objectId, documentData.version);
+	                    }
+
+	                    logger.info(`${skipCount + docsVersionsData.length} of ${orientCount} orient documents received`);
+	                } catch (err) {
+	                    if (CONNECTION_ERROR_CODES.includes(err.code)) {
+	                        logger.warn("There are connection troubles...");
+
+	                        await getOrientDocsVersions.apply(this, arguments);
+	                        return;
+	                    } else {
+	                        throw err;
+	                    }
+	                }
+	            },
+	            iterator: getProcessedCount(orientCount, ORIENT_GETTING_LIMIT)
+	        });
+	        docsGettingFlows.push(orientDocsGettingFlow);
+
+	        await Promise.all(docsGettingFlows);
+	        logger.info("Finished getting docs versions data");
+
+			const notExistDocs = new Set(),
+				existDocs = new Set(),
+				differentVersions = new Set();
+			const fullCheckEntityData = {
+				"notExistDocs": notExistDocs,
+				"existDocs": existDocs,
+				"differentVersions": differentVersions
+			}
+			FullCheckEntitiesMap.set(entityId, fullCheckEntityData);
+
+			let solrDocVersion = 0;
+			for (let [objectId, orientDocVersion] of orientDocsMap) {
+				solrDocVersion = solrDocsMap.get(objectId);
+				if (solrDocVersion) {
+					if (orientDocVersion !== solrDocVersion) {
+						differentVersions.add(objectId);
+					}
+					
+					solrDocsMap.delete(objectId);
+				} else {
+					notExistDocs.add(objectId);
+				}
+				
+				orientDocsMap.delete(objectId);
+			}
+			for (let objectId of solrDocsMap.keys()) {
+				existDocs.add(objectId);
+				
+				solrDocsMap.delete(objectId);
+			}
+	        
+	        logger.info("Full check of entity '" + entityData.umlName + "' is completed");
+        } catch (err) {
+        	logger.error(err);
+        }
+    } catch (err) {
+        res.sendStatus(400);
+
+        logger.error(err);
+    }
+});
+
+app.get("/getFullCheckData/:entityId", async (req, res) => {
+    try {
+    	const entityId = req.params.entityId;
+        if (!entityId) {
+        	throw new Error("entityId is not defined");
+        }
+        const entityData = EntitiesMap.get(entityId);
+        if (!entityData) {
+        	throw new Error("Unknown entityId: " + entityId);
+        }
+
+        const fullCheckData = FullCheckEntitiesMap.get(entityId);
+        if (fullCheckData) {
+        	res.send({
+        		"notExistDocs": [...fullCheckData.notExistDocs],
+        		"existDocs": [...fullCheckData.existDocs],
+        		"differentVersions": [...fullCheckData.differentVersions]
+        	});
+        } else {
+        	res.send({});
+        }
+    } catch (err) {
+        res.sendStatus(400);
+
+        logger.error(err);
+    }
+});
+
 async function processEntityById(entityId, entitiesMap){
     const entityData = entitiesMap.get(entityId);
     if (entityData && !entityData.checked) {
@@ -782,32 +801,6 @@ async function processWorkflowById(workflowId, workflowsMap){
 
         workflowData.checked = true;
     }
-}
-
-function globalCookieManager({loginFunction, checkCookieFunction}){
-    async function refreshCookie() {
-        cookie = await loginFunction();
-        return cookie;
-    }
-
-    let cookie = null;
-
-    this.getCookie = function() {
-        return cookie;
-    }
-    this.getActualCookie = async function() {
-        if (!cookie) {
-            return await refreshCookie();
-        } else {
-            let checkCookieResult = await checkCookieFunction(cookie);
-            if (checkCookieResult === true) {
-                return cookie;
-            } else {
-                return await refreshCookie();
-            }
-        }
-    }
-    this.refreshCookie = refreshCookie;
 }
 
 async function startFlow({execFunction,iterator}){
