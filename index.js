@@ -4,6 +4,7 @@ const logger = require("./core/logger.js");
 console.log = console.info = logger.info.bind(logger);
 console.warn = logger.warn.bind(logger);
 console.error = logger.error.bind(logger);
+console.debug = logger.debug.bind(logger);
 
 const express = require('express');
 const cors = require('cors');
@@ -55,9 +56,11 @@ app.use(express.json()) // for parsing application/json
 app.use(express.urlencoded({ extended: true })) // for parsing application/x-www-form-urlencoded
 app.use(cors()); //for using cors
 
+const NODE_ENV = process.env.NODE_ENV || "";
+logger.info(`NODE_ENV = ${NODE_ENV}`);
+
 const port = config.get("application.port");
 app.listen(port);
-
 logger.info(`WebModule enabled on port: ${port}`);
 
 const CONNECTION_ERROR_CODES = ["ECONNABORTED", "ECONNRESET", "ETIMEDOUT"];
