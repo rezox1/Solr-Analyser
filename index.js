@@ -60,7 +60,7 @@ app.listen(port);
 
 logger.info(`WebModule enabled on port: ${port}`);
 
-const CONNECTION_ERROR_CODES = ["ECONNABORTED", "ECONNRESET"];
+const CONNECTION_ERROR_CODES = ["ECONNABORTED", "ECONNRESET", "ETIMEDOUT"];
 
 app.get("/", async (req, res) => {
     try {

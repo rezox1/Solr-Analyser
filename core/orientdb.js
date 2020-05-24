@@ -4,7 +4,7 @@ const logger = require("./logger.js");
 const axios = require('axios');
 const btoa = require('btoa');
 
-const CONNECTION_ERROR_CODES = ["ECONNABORTED", "ECONNRESET"];
+const CONNECTION_ERROR_CODES = ["ECONNABORTED", "ECONNRESET", "ETIMEDOUT"];
 
 function OrientDBApp({orientUrl, orientDBName, orientUsername, orientPassword}){
     async function makeQuery(queryString){
