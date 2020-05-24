@@ -1,6 +1,3 @@
-//import log4j subsystem
-const logger = require("./logger.js");
-
 const axios = require('axios');
 const btoa = require('btoa');
 
@@ -58,11 +55,11 @@ function OrientDBApp({orientUrl, orientDBName, orientUsername, orientPassword}){
                 });
             } catch (err) {
                 if (CONNECTION_ERROR_CODES.includes(err.code)) {
-                    logger.warn("There are connection troubles...");
+                    console.warn("There are connection troubles...");
 
                     return await checkCookieFunction.apply(this, arguments);
                 } else {
-                    logger.error("Error while evaluating checkCookieFunction from orient's inctance: " + err);
+                    console.error("Error while evaluating checkCookieFunction from orient's inctance: " + err);
 
                     checkCookieResult = false;
                 }
