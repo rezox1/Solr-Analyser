@@ -631,7 +631,7 @@ app.get("/startFullCheck/:entityId", async (req, res) => {
 	                    	solrDocsMap.set(documentData.objectId, documentData.version);
 	                    }
 
-	                    logger.info(`${skipCount + docsVersionsData.length} of ${solrCount} solr documents received`);
+	                    logger.info(`${solrDocsMap.size} of ${solrCount} solr documents received`);
 	                } catch (err) {
 	                    if (CONNECTION_ERROR_CODES.includes(err.code)) {
 	                        logger.warn("There are connection troubles...");
@@ -660,7 +660,7 @@ app.get("/startFullCheck/:entityId", async (req, res) => {
 	                    	orientDocsMap.set(documentData.objectId, documentData.version);
 	                    }
 
-	                    logger.info(`${skipCount + docsVersionsData.length} of ${orientCount} orient documents received`);
+	                    logger.info(`${orientDocsMap.size} of ${orientCount} orient documents received`);
 	                } catch (err) {
 	                    if (CONNECTION_ERROR_CODES.includes(err.code)) {
 	                        logger.warn("There are connection troubles...");
