@@ -56,7 +56,7 @@ app.use(express.json()) // for parsing application/json
 app.use(express.urlencoded({ extended: true })) // for parsing application/x-www-form-urlencoded
 app.use(cors()); //for using cors
 
-const NODE_ENV = process.env.NODE_ENV;
+const NODE_ENV = process.env.NODE_ENV || "";
 logger.info(`NODE_ENV = ${NODE_ENV}`);
 
 const port = config.get("application.port");
