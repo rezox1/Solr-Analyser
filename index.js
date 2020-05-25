@@ -495,6 +495,28 @@ app.get("/getEntitiesList", async (req, res) => {
     }
 });
 
+app.get("/getWorkflowsList", async (req, res) => {
+    try {
+        const workflowsList = [];
+
+        for (let [workflowId, workflowData] of WorkflowsMap) {
+            if (workflowData.checked) {
+                let item = {
+                    "workflowId": workflowId,
+                    "name": workflowData.name + " - " + workflowData.orientCount.toFixed() + "/" + workflowData.solrCount.toFixed()
+                }
+                workflowsList.push(item);
+            }
+        }
+
+        res.send(workflowsList);
+    } catch (err) {
+        res.sendStatus(400);
+
+        logger.error(err);
+    }
+});
+
 const SET_TIMEOUT_LIMIT = 2147483647;
 
 app.get("/syncEntity/:entityId", async (req, res) => {
