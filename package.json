@@ -5,6 +5,7 @@
     "main": "index.js",
     "repository": "https://github.com/rezox1/Solr-Analyser",
     "dependencies": {
+        "async": "^3.2.0",
         "axios": "^0.19.2",
         "btoa": "^1.2.1",
         "config": "^3.3.1",
