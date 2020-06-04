@@ -11,6 +11,7 @@ const cors = require('cors');
 const app = express();
 
 const config = require("config");
+const async = require("async");
 
 const {DigitApp} = require("digitjs");
 const {SolrApp} = require("./core/solr.js");
@@ -257,36 +258,38 @@ app.get("/checkAll", async (req, res) => {
         const FORM_PROCESSING_FLOWS_COUNT = config.get("other.formFlowsCount");
         logger.info("Total flows count for forms is " + FORM_PROCESSING_FLOWS_COUNT);
 
-        let formGettingFlows = [], formsIterator = forms[Symbol.iterator](),
-            formDatas = [], formsDataReceivedAmount = 0;
-        for (let i = 0; i < FORM_PROCESSING_FLOWS_COUNT; i++) {
-            let newFlow = startFlow({
-                execFunction: async function getFormDataById(formObjectId) {
-                    let formData;
-                    try {
-                        formData = await digitApp.getFormData(formObjectId);
-                    } catch (err) {
-                        if (CONNECTION_ERROR_CODES.includes(err.code)) {
-                            logger.warn("There are connection troubles...");
-
-                            await getFormDataById.apply(this, arguments);
-                            return;
-                        } else {
-                            throw err;
-                        }
-                    }
+        let formDatas = [], formsDataReceivedAmount = 0;
+        
+        let formGettingResult = await async.everyLimit(forms, FORM_PROCESSING_FLOWS_COUNT, async function getFormDataById(formObjectId){
+            try {
+                try {
+                    let formData = await digitApp.getFormData(formObjectId);
                     formDatas.push(formData);
-                    
+                
                     formsDataReceivedAmount++;
                     if (formsDataReceivedAmount % 100 === 0) {
                         logger.info(formsDataReceivedAmount + " forms data received");
                     }
-                },
-                iterator: formsIterator
-            });
-            formGettingFlows.push(newFlow);
+
+                    return true;
+                } catch (err) {
+                    if (CONNECTION_ERROR_CODES.includes(err.code)) {
+                        logger.warn("There are connection troubles...");
+
+                        return await getFormDataById.apply(this, arguments);
+                    } else {
+                        throw err;
+                    }
+                }
+            } catch (err) {
+                logger.error(err);
+
+                return false;
+            }
+        });
+        if (!formGettingResult) {
+            throw new Error("There are troubles while getting forms data!");
         }
-        await Promise.all(formGettingFlows);
         logger.info("Finished getting forms data");
 
         logger.info("Starting forms processing...");
