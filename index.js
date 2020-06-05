@@ -11,6 +11,7 @@ const cors = require('cors');
 const app = express();
 
 const config = require("config");
+const async = require("async");
 
 const {DigitApp} = require("digitjs");
 const {SolrApp} = require("./core/solr.js");
@@ -257,36 +258,26 @@ app.get("/checkAll", async (req, res) => {
         const FORM_PROCESSING_FLOWS_COUNT = config.get("other.formFlowsCount");
         logger.info("Total flows count for forms is " + FORM_PROCESSING_FLOWS_COUNT);
 
-        let formGettingFlows = [], formsIterator = forms[Symbol.iterator](),
-            formDatas = [], formsDataReceivedAmount = 0;
-        for (let i = 0; i < FORM_PROCESSING_FLOWS_COUNT; i++) {
-            let newFlow = startFlow({
-                execFunction: async function getFormDataById(formObjectId) {
-                    let formData;
-                    try {
-                        formData = await digitApp.getFormData(formObjectId);
-                    } catch (err) {
-                        if (CONNECTION_ERROR_CODES.includes(err.code)) {
-                            logger.warn("There are connection troubles...");
+        let formDatas = [], formsDataReceivedAmount = 0;
+        await async.eachLimit(forms, FORM_PROCESSING_FLOWS_COUNT, async function getFormDataById(formObjectId) {
+            try {
+                let formData = await digitApp.getFormData(formObjectId);
+                formDatas.push(formData);
+            
+                formsDataReceivedAmount++;
+                if (formsDataReceivedAmount % 100 === 0) {
+                    logger.info(formsDataReceivedAmount + " forms data received");
+                }
+            } catch (err) {
+                if (CONNECTION_ERROR_CODES.includes(err.code)) {
+                    logger.warn("There are connection troubles...");
 
-                            await getFormDataById.apply(this, arguments);
-                            return;
-                        } else {
-                            throw err;
-                        }
-                    }
-                    formDatas.push(formData);
-                    
-                    formsDataReceivedAmount++;
-                    if (formsDataReceivedAmount % 100 === 0) {
-                        logger.info(formsDataReceivedAmount + " forms data received");
-                    }
-                },
-                iterator: formsIterator
-            });
-            formGettingFlows.push(newFlow);
-        }
-        await Promise.all(formGettingFlows);
+                    return await getFormDataById.apply(this, arguments);
+                } else {
+                    throw err;
+                }
+            }
+        });
         logger.info("Finished getting forms data");
 
         logger.info("Starting forms processing...");
@@ -316,36 +307,26 @@ app.get("/checkAll", async (req, res) => {
         const VIS_PROCESSING_FLOWS_COUNT = config.get("other.visFlowsCount");
         logger.info("Total flows count for vises is " + VIS_PROCESSING_FLOWS_COUNT);
 
-        let visGettingFlows = [], visesIterator = vises[Symbol.iterator](),
-            visDatas = [], visesDataReceivedAmount = 0;
-        for (let i = 0; i < VIS_PROCESSING_FLOWS_COUNT; i++) {
-            let newFlow = startFlow({
-                execFunction: async function getVisDataById(visObjectId) {
-                    let visData;
-                    try {
-                        visData = await digitApp.getVisData(visObjectId);
-                    } catch (err) {
-                        if (CONNECTION_ERROR_CODES.includes(err.code)) {
-                            logger.warn("There are connection troubles...");
+        let visDatas = [], visesDataReceivedAmount = 0;
+        await async.eachLimit(vises, VIS_PROCESSING_FLOWS_COUNT, async function getVisDataById(visObjectId) {
+            try {
+                let visData = await digitApp.getVisData(visObjectId);
+                visDatas.push(visData);
+                
+                visesDataReceivedAmount++;
+                if (visesDataReceivedAmount % 100 === 0) {
+                    logger.info(visesDataReceivedAmount + " vises data received");
+                }
+            } catch (err) {
+                if (CONNECTION_ERROR_CODES.includes(err.code)) {
+                    logger.warn("There are connection troubles...");
 
-                            await getVisDataById.apply(this, arguments);
-                            return;
-                        } else {
-                            throw err;
-                        }
-                    }
-                    visDatas.push(visData);
-                    
-                    visesDataReceivedAmount++;
-                    if (visesDataReceivedAmount % 100 === 0) {
-                        logger.info(visesDataReceivedAmount + " vises data received");
-                    }
-                },
-                iterator: visesIterator
-            });
-            visGettingFlows.push(newFlow);
-        }
-        await Promise.all(visGettingFlows);
+                    return await getVisDataById.apply(this, arguments);
+                } else {
+                    throw err;
+                }
+            }
+        });
         logger.info("Finished getting vises data");
 
         logger.info("Starting vises processing...");
@@ -642,63 +623,59 @@ app.get("/startFullCheck/:entityId", async (req, res) => {
 
 			const docsGettingFlows = [];
 	        
-			const SOLR_GETTING_LIMIT = 10000;
-	        const solrDocsGettingFlow = startFlow({
-	            execFunction: async function getSolrDocsVersions(skipCount) {
-	                try {
-	                    let docsVersionsData = await solrApp.getDocsVersions({
-	                    	"entityId": entityId,
-	                    	"coreName": entityData.solrCore,
-	                    	"limit": SOLR_GETTING_LIMIT,
-	                    	"skip": skipCount
-	                    });
-	                    for (let documentData of docsVersionsData) {
-	                    	solrDocsMap.set(documentData.objectId, documentData.version);
-	                    }
+			const SOLR_GETTING_LIMIT = 10000,
+                processedSolrGenerator = getProcessedCount(solrCount, SOLR_GETTING_LIMIT);
 
-	                    logger.info(`${solrDocsMap.size} of ${solrCount} solr documents received`);
-	                } catch (err) {
-	                    if (CONNECTION_ERROR_CODES.includes(err.code)) {
-	                        logger.warn("There are connection troubles...");
+	        const solrDocsGettingFlow = async.eachLimit(processedSolrGenerator, 1, async function getSolrDocsVersions(skipCount) {
+                try {
+                    let docsVersionsData = await solrApp.getDocsVersions({
+                        "entityId": entityId,
+                        "coreName": entityData.solrCore,
+                        "limit": SOLR_GETTING_LIMIT,
+                        "skip": skipCount
+                    });
+                    for (let documentData of docsVersionsData) {
+                        solrDocsMap.set(documentData.objectId, documentData.version);
+                    }
 
-	                        await getSolrDocsVersions.apply(this, arguments);
-	                        return;
-	                    } else {
-	                        throw err;
-	                    }
-	                }
-	            },
-	            iterator: getProcessedCount(solrCount, SOLR_GETTING_LIMIT)
-	        });
+                    logger.info(`${solrDocsMap.size} of ${solrCount} solr documents received`);
+                } catch (err) {
+                    if (CONNECTION_ERROR_CODES.includes(err.code)) {
+                        logger.warn("There are connection troubles...");
+
+                        return await getSolrDocsVersions.apply(this, arguments);
+                    } else {
+                        throw err;
+                    }
+                }
+            });
 	        docsGettingFlows.push(solrDocsGettingFlow);
 	        
-	        const ORIENT_GETTING_LIMIT = 10000;
-	        const orientDocsGettingFlow = startFlow({
-	            execFunction: async function getOrientDocsVersions(skipCount) {
-	                try {
-	                    let docsVersionsData = await orientApp.getDocsVersions({
-	                    	"entityClassName": entityData.dbname,
-	                    	"limit": ORIENT_GETTING_LIMIT,
-	                    	"skip": skipCount
-	                    });
-	                    for (let documentData of docsVersionsData) {
-	                    	orientDocsMap.set(documentData.objectId, documentData.version);
-	                    }
+	        const ORIENT_GETTING_LIMIT = 10000,
+                processedOrientGenerator = getProcessedCount(orientCount, ORIENT_GETTING_LIMIT);
 
-	                    logger.info(`${orientDocsMap.size} of ${orientCount} orient documents received`);
-	                } catch (err) {
-	                    if (CONNECTION_ERROR_CODES.includes(err.code)) {
-	                        logger.warn("There are connection troubles...");
+	        const orientDocsGettingFlow = async.eachLimit(processedOrientGenerator, 1, async function getOrientDocsVersions(skipCount) {
+                try {
+                    let docsVersionsData = await orientApp.getDocsVersions({
+                        "entityClassName": entityData.dbname,
+                        "limit": ORIENT_GETTING_LIMIT,
+                        "skip": skipCount
+                    });
+                    for (let documentData of docsVersionsData) {
+                        orientDocsMap.set(documentData.objectId, documentData.version);
+                    }
 
-	                        await getOrientDocsVersions.apply(this, arguments);
-	                        return;
-	                    } else {
-	                        throw err;
-	                    }
-	                }
-	            },
-	            iterator: getProcessedCount(orientCount, ORIENT_GETTING_LIMIT)
-	        });
+                    logger.info(`${orientDocsMap.size} of ${orientCount} orient documents received`);
+                } catch (err) {
+                    if (CONNECTION_ERROR_CODES.includes(err.code)) {
+                        logger.warn("There are connection troubles...");
+
+                        return await getOrientDocsVersions.apply(this, arguments);
+                    } else {
+                        throw err;
+                    }
+                }
+            });
 	        docsGettingFlows.push(orientDocsGettingFlow);
 
 	        await Promise.all(docsGettingFlows);
@@ -836,18 +813,6 @@ async function processWorkflowById(workflowId, workflowsMap){
         }
 
         workflowData.checked = true;
-    }
-}
-
-async function startFlow({execFunction,iterator}){
-    let isRunning = true, nextIteration;
-    while (isRunning) {
-        nextIteration = iterator.next();
-        if (!nextIteration.done) {
-            await execFunction(nextIteration.value);
-        } else {
-            isRunning = false;
-        }
     }
 }
 
