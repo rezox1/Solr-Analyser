@@ -2,6 +2,19 @@
 	"application": {
 		"port": 3000
 	},
+	"portForwarding": {
+		"enable": false,
+		"connectionSetting": {
+			"host": "127.0.0.1",
+			"port": 22,
+			"username": "reader",
+			"password": "reader"
+		},
+		"forwardSettings": [{
+			"remoteHost": "localhost",
+			"remotePort": 8000
+		}]
+	},
 	"digit": {
 		"url": "http://localhost:8080/",
 		"username": "admin",
@@ -18,15 +31,10 @@
 		"username": "reader",
 		"password": "reader"
 	},
-	//other settings
 	"other": {
-		//forms limit processing (-1 is unlimited)
 		"formLimit": -1,
-		//flows count for getting forms
 		"formFlowsCount": 10,
-		//vises limit processing (-1 is unlimited)
 		"visLimit": -1,
-		//flows count for getting vises
 		"visFlowsCount": 10
 	}
 }
