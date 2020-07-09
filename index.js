@@ -10,8 +10,39 @@ const express = require('express');
 const cors = require('cors');
 const app = express();
 
+const NODE_ENV = process.env.NODE_ENV || "";
+logger.info(`NODE_ENV = ${NODE_ENV}`);
+
 const config = require("config");
 const async = require("async");
+
+const portForwardingEnable = config.get("portForwarding.enable");
+if (portForwardingEnable === true) {
+    logger.info("PortForwarding is enabled");
+
+    const {SSHConnection} = require('node-ssh-forward');
+    const sshConnection = new SSHConnection({
+        endHost: '192.168.120.80',
+        endPort: 55139,
+        username: "reader",
+        password: "ti9gMUKFzQ#iXH{aYMB<"
+    });
+
+    const forwardSettings = config.get("portForwarding.forwardSettings");
+    for (let forwardSetting of forwardSettings) {
+        sshConnection.forward({
+            fromPort: forwardSetting.remotePort,
+            toPort: forwardSetting.remotePort,
+            toHost: forwardSetting.remoteHost
+        }).then(() => {
+            logger.info(`Port ${forwardSetting.remotePort} for ${forwardSetting.remoteHost} successfully forwarded`);
+        }).catch(errorData => {
+            logger.error(errorData);
+
+            logger.warning(`An error catched while forwarding ${forwardSetting.remotePort} port`);
+        });
+    }
+}
 
 const {DigitApp} = require("digitjs");
 const {SolrApp} = require("./core/solr.js");
@@ -56,9 +87,6 @@ const orientApp = new OrientDBApp({
 app.use(express.json()) // for parsing application/json
 app.use(express.urlencoded({ extended: true })) // for parsing application/x-www-form-urlencoded
 app.use(cors()); //for using cors
-
-const NODE_ENV = process.env.NODE_ENV || "";
-logger.info(`NODE_ENV = ${NODE_ENV}`);
 
 const port = config.get("application.port");
 app.listen(port);

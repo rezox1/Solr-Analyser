@@ -14,7 +14,8 @@
         "digitjs": "git+https://github.com/rezox1/DigitJS.git",
         "express": "^4.17.1",
         "log4js": "^6.2.1",
-        "orient-http-client": "git+https://github.com/rezox1/orient-http-client.git"
+        "orient-http-client": "git+https://github.com/rezox1/orient-http-client.git",
+        "node-ssh-forward": "^0.7.2"
     },
     "devDependencies": {},
     "scripts": {
