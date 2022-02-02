@@ -5,17 +5,17 @@
     "main": "index.js",
     "repository": "https://github.com/rezox1/Solr-Analyser",
     "dependencies": {
-        "async": "^3.2.0",
+        "async": "^3.2.3",
         "axios": "^0.21.2",
         "btoa": "^1.2.1",
-        "config": "^3.3.1",
+        "config": "^3.3.7",
         "cors": "^2.8.5",
-        "dayjs": "^1.8.27",
+        "dayjs": "^1.10.7",
         "digitjs": "git+https://github.com/rezox1/DigitJS.git",
-        "express": "^4.17.1",
+        "express": "^4.17.2",
         "log4js": "^6.4.0",
-        "orient-http-client": "git+https://github.com/rezox1/orient-http-client.git",
-        "node-ssh-forward": "^0.7.2"
+        "node-ssh-forward": "^0.7.2",
+        "orient-http-client": "git+https://github.com/rezox1/orient-http-client.git"
     },
     "devDependencies": {},
     "scripts": {
