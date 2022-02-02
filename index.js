@@ -528,23 +528,23 @@ app.get("/getWorkflowsList", async (req, res) => {
 
 const SET_TIMEOUT_LIMIT = 2147483647;
 
+async function getTransactionPercent(transactionId){
+    try {
+        let {"percent": transactionPercent} = await digitApp.getTransactionData(transactionId);
+        return transactionPercent;
+    } catch (err) {
+        if (CONNECTION_ERROR_CODES.includes(err.code)) {
+            logger.warn("There are connection troubles...");
+
+            transactionPercent = await getTransactionPercent.apply(this, arguments);
+            return transactionPercent;
+        } else {
+            throw err;
+        }
+    }
+}
+
 app.get("/syncEntity/:entityId", async (req, res) => {
-    async function getTransactionPercent(transactionId){
-		try {
-			let {"percent": transactionPercent} = await digitApp.getTransactionData(transactionId);
-			return transactionPercent;
-		} catch (err) {
-			if (CONNECTION_ERROR_CODES.includes(err.code)) {
-				logger.warn("There are connection troubles...");
-
-				transactionPercent = await getTransactionPercent.apply(this, arguments);
-				return transactionPercent;
-			} else {
-				throw err;
-			}
-		}
-	}
-
     try {
         const entityId = req.params.entityId;
         if (!entityId) {
@@ -607,6 +607,85 @@ app.get("/syncEntity/:entityId", async (req, res) => {
 		} catch (err) {
 			logger.error(err);
 		}
+    } catch (err) {
+        res.sendStatus(400);
+
+        logger.error(err);
+    }
+});
+
+app.get("/syncAllWrongDocuments/:entityId", async (req, res) => {
+    try {
+        const entityId = req.params.entityId;
+        if (!entityId) {
+            throw new Error("entityId is not defined");
+        }
+
+        const {"umlName": entityName} = EntitiesMap.get(entityId);
+
+        let objectIdsToRecovery = [];
+
+        const fullCheckData = FullCheckEntitiesMap.get(entityId);
+        if (fullCheckData) {
+            objectIdsToRecovery = [...fullCheckData.notExistDocs, ...fullCheckData.differentVersions];
+        } else {
+            res.sendStatus(200);
+        }
+
+        let objectIdsToDelete = [...fullCheckData.existDocs];
+        if (objectIdsToDelete.length > 0) {
+            logger.info('Send request to delete unnecessary documents from solr');
+
+            digitApp.deleteObjects(objectIdsToDelete).then(() => {
+                logger.info('Unnecessary documents was deleted from solr');
+
+                let entityData = EntitiesMap.get(entityId);
+                //to repeat processing
+                entityData.checked = false;
+                processEntityById(entityId, EntitiesMap).catch(err => {
+                    logger.error(err);
+                });
+            }).catch(err => {
+                logger.error(err);
+            });
+        }
+
+        if (objectIdsToRecovery.length > 0) {
+            const transactionId = await digitApp.syncDocuments({
+                "entityId": entityId,
+                "objectIds": objectIdsToRecovery
+            });
+
+            logger.info('Start documents synchronization of "' + entityName + '"');
+            if (!res.headersSent) {
+                res.sendStatus(200);
+            }
+
+            try {
+                let transactionInProgress = true;
+                while (transactionInProgress) {
+                    let transactionPercent = await getTransactionPercent(transactionId);
+                    if (transactionPercent >= 100) {
+                        transactionInProgress = false;
+
+                        let entityData = EntitiesMap.get(entityId);
+                        //to repeat processing
+                        entityData.checked = false;
+                        await processEntityById(entityId, EntitiesMap);
+
+                        logger.info('Synchronization documents of "' + entityName + '" is completed');
+                    } else {
+                        if (transactionPercent > 0) {
+                            logger.info('Current transaction percent for "' + entityName + '" documents is ' + transactionPercent);
+                        }
+
+                        await sleep(10000);
+                    }
+                }
+            } catch (err) {
+                logger.error(err);
+            }
+        }
     } catch (err) {
         res.sendStatus(400);
 
