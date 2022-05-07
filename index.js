@@ -20,12 +20,14 @@ const portForwardingEnable = config.get("portForwarding.enable");
 if (portForwardingEnable === true) {
     logger.info("PortForwarding is enabled");
 
+    const connecttionSetting = config.get("portForwarding.connectionSetting");
+
     const {SSHConnection} = require('node-ssh-forward');
     const sshConnection = new SSHConnection({
-        endHost: '192.168.120.80',
-        endPort: 55139,
-        username: "reader",
-        password: "ti9gMUKFzQ#iXH{aYMB<"
+        endHost: connecttionSetting.host,
+        endPort: connecttionSetting.port,
+        username: connecttionSetting.username,
+        password: connecttionSetting.password
     });
 
     const forwardSettings = config.get("portForwarding.forwardSettings");
