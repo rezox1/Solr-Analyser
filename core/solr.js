@@ -1,7 +1,7 @@
 const axios = require('axios');
 
 function SolrApp({solrUrl, defaultSolrCore, wsName}){
-    async function makeSolrQuery({queryString, coreName, fieldList, limit, skip}){
+    async function makeSolrQuery({queryString, coreName, fieldList, limit, skip, additionalRequestPart}){
         if (!queryString) {
         	throw new Error("queryString is not defined");
         } else if (fieldList && !Array.isArray(fieldList)) {
@@ -23,15 +23,20 @@ function SolrApp({solrUrl, defaultSolrCore, wsName}){
         if (fieldList && fieldList.length > 0) {
         	requestURL += `&fl=${fieldList.join(",")}`
         }
-        const {data:{response}} = await solrInstance.get(requestURL, {
+        if (additionalRequestPart) {
+            requestURL += additionalRequestPart;
+        }
+
+        const {data} = await solrInstance.get(requestURL, {
             headers: {
                 "Content-Type": "application/json;charset=UTF-8"
             }
         });
 
-        return response;
+        return data;
     }
-    async function getCoresSet(){
+
+    async function getCoresSet() {
         const coresSet = new Set();
         coresSet.add(defaultSolrCore);
 
@@ -62,7 +67,7 @@ function SolrApp({solrUrl, defaultSolrCore, wsName}){
             }
 
             const queryString = "entityId_sm:" + entityId;
-            const {numFound} = await makeSolrQuery({
+            const {response:{numFound}} = await makeSolrQuery({
             	"queryString": queryString, 
             	"coreName": coreName,
             	"limit": 0,
@@ -79,7 +84,7 @@ function SolrApp({solrUrl, defaultSolrCore, wsName}){
             let totalDocsCount = 0;
 
             const queryString = "workflowId_s:" + workflowId;
-            const {numFound} = await makeSolrQuery({
+            const {response:{numFound}} = await makeSolrQuery({
             	"queryString": queryString,
             	"limit": 0,
             	"skip": 0
@@ -95,7 +100,7 @@ function SolrApp({solrUrl, defaultSolrCore, wsName}){
 
             const allSolrCores = await getCoresSet();
             for (let solrCore of allSolrCores) {
-                let {numFound} = await makeSolrQuery({
+                let {response:{numFound}} = await makeSolrQuery({
                 	"queryString": queryString, 
                 	"coreName": solrCore,
             		"limit": 0,
@@ -108,7 +113,7 @@ function SolrApp({solrUrl, defaultSolrCore, wsName}){
         },
         getTotalDocsCountByWorkflows: async function() {
             const queryString = "-(entityId_sm:[* TO *]) && workflowId_s:[* TO *]";
-            const {numFound} = await makeSolrQuery({
+            const {response:{numFound}} = await makeSolrQuery({
             	"queryString": queryString,
             	"limit": 0,
             	"skip": 0
@@ -126,7 +131,7 @@ function SolrApp({solrUrl, defaultSolrCore, wsName}){
         	}
 
         	const queryString = `entityId_sm:${entityId}`;
-            const {docs} = await makeSolrQuery({
+            const {response:{docs}} = await makeSolrQuery({
             	"queryString": queryString,
             	"coreName": coreName, //can be undefined
             	"fieldList": ["id", "__orientVersion_d"],
@@ -148,6 +153,22 @@ function SolrApp({solrUrl, defaultSolrCore, wsName}){
             }
 
             return docsVersionsData;
+        },
+        getDocsVersionsSumByEntityId: async function(entityId, coreName) {
+            if (!entityId) {
+                throw new Error("entityId is not defined");
+            }
+
+            const queryString = "entityId_sm:" + entityId;
+            const {stats:{stats_fields:{__orientVersion_d:{sum}}}} = await makeSolrQuery({
+                "queryString": queryString,
+                "coreName": coreName,
+                "limit": 0,
+                "skip": 0,
+                "additionalRequestPart": "&stats=true&stats.field=__orientVersion_d"
+            });
+
+            return sum;
         }
     }
 }

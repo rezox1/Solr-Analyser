@@ -860,7 +860,7 @@ app.get("/getFullCheckData/:entityId", async (req, res) => {
     }
 });
 
-async function processEntityById(entityId, entitiesMap){
+async function processEntityById(entityId, entitiesMap) {
     const entityData = entitiesMap.get(entityId);
     if (entityData && !entityData.checked) {
         let solrCoreName = entityData.solrCore;
@@ -871,16 +871,24 @@ async function processEntityById(entityId, entitiesMap){
             ]);
 
             entityData.solrCount = solrCount;
-	        entityData.orientCount = orientCount;
-	        entityData.hasDifference = false;
-	        entityData.delta = 0;
-	        
-	        if (solrCount !== orientCount) {
-	            entityData.hasDifference = true;
-	            entityData.delta = solrCount - orientCount;
-	        }
+            entityData.orientCount = orientCount;
+            entityData.hasDifference = false;
+            entityData.delta = solrCount - orientCount;
 
-	        entityData.checked = true;
+            if (entityData.delta) {
+                entityData.hasDifference = true;
+            } else {
+                let [solrDocsVersionsSum, orientDocsVersionsSum] = await Promise.all([
+                    solrApp.getDocsVersionsSumByEntityId(entityId, solrCoreName),
+                    orientApp.getDocsVersionsSumByClassName(entityData.dbname)
+                ]);
+
+                if (solrDocsVersionsSum !== orientDocsVersionsSum) {
+                    entityData.hasDifference = true;
+                }
+            }
+
+            entityData.checked = true;
         } catch (err) {
             if (CONNECTION_ERROR_CODES.includes(err.code)) {
                 logger.warn("There are connection troubles...");
@@ -894,7 +902,7 @@ async function processEntityById(entityId, entitiesMap){
     }
 }
 
-async function processWorkflowById(workflowId, workflowsMap){
+async function processWorkflowById(workflowId, workflowsMap) {
     const workflowData = workflowsMap.get(workflowId);
     if (workflowData && !workflowData.checked) {
         let solrCount = 0, orientCount = 0;
