@@ -74,4 +74,15 @@ OrientDBApp.prototype.getDocsVersions = async function({entityClassName, limit, 
     return docsVersionsData;
 }
 
+OrientDBApp.prototype.getDocsVersionsSumByClassName = async function(entityClassName) {
+    if (!entityClassName) {
+        throw new Error("entityClassName is not defined");
+    }
+
+    const searchString = "SELECT sum(@version) FROM " + entityClassName + " WHERE (deleted = false or deleted is null)";
+
+    const [searchResult] = await this.makeQuery(searchString);
+    return searchResult.sum;
+}
+
 module.exports.OrientDBApp = OrientDBApp;
