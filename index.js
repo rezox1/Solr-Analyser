@@ -950,8 +950,6 @@ async function syncAllWrongEntityDocuments(entityId) {
     const entityData = EntitiesMap.get(entityId);
     const entityName = entityData.umlName;
 
-    let objectIdsToRecovery = [];
-
     let fullCheckData = FullCheckEntitiesMap.get(entityId);
     if (!fullCheckData) {
         fullCheckData = await doEntityFullCheck(entityId, entityData);
