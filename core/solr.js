@@ -1,15 +1,15 @@
 const axios = require('axios');
 
 function SolrApp({solrUrl, defaultSolrCore, wsName}){
-    async function makeSolrQuery({queryString, coreName, fieldList, limit, skip, additionalRequestPart}){
+    async function makeSolrQuery({queryString, coreName, fieldList, limit, skip, sort, additionalRequestPart}){
         if (!queryString) {
-        	throw new Error("queryString is not defined");
+            throw new Error("queryString is not defined");
         } else if (fieldList && !Array.isArray(fieldList)) {
-        	throw new Error("fieldList must be an array");
+            throw new Error("fieldList must be an array");
         } else if (!limit && limit !== 0) {
-        	throw new Error("limit is not defined");
+            throw new Error("limit is not defined");
         } else if (!skip && skip !== 0) {
-        	throw new Error("skip is not defined");
+            throw new Error("skip is not defined");
         }
 
         let solrCore;
@@ -21,7 +21,10 @@ function SolrApp({solrUrl, defaultSolrCore, wsName}){
 
         let requestURL = `${solrCore}/select?q=${queryString}&rows=${limit}&start=${skip}`;
         if (fieldList && fieldList.length > 0) {
-        	requestURL += `&fl=${fieldList.join(",")}`
+            requestURL += `&fl=${fieldList.join(",")}`;
+        }
+        if (sort) {
+            requestURL += `&sort=${sort}`;
         }
         if (additionalRequestPart) {
             requestURL += additionalRequestPart;
@@ -63,31 +66,31 @@ function SolrApp({solrUrl, defaultSolrCore, wsName}){
     return {
         getDocsCountByEntityId: async function(entityId, coreName) {
             if (!entityId) {
-            	throw new Error("entityId is not defined");
+                throw new Error("entityId is not defined");
             }
 
             const queryString = "entityId_sm:" + entityId;
             const {response:{numFound}} = await makeSolrQuery({
-            	"queryString": queryString, 
-            	"coreName": coreName,
-            	"limit": 0,
-            	"skip": 0
+                "queryString": queryString,
+                "coreName": coreName,
+                "limit": 0,
+                "skip": 0
             });
 
             return numFound;
         },
         getDocsCountByWorkflowId: async function(workflowId) {
             if (!workflowId) {
-            	throw new Error("workflowId is not defined");
+                throw new Error("workflowId is not defined");
             } 
 
             let totalDocsCount = 0;
 
             const queryString = "workflowId_s:" + workflowId;
             const {response:{numFound}} = await makeSolrQuery({
-            	"queryString": queryString,
-            	"limit": 0,
-            	"skip": 0
+                "queryString": queryString,
+                "limit": 0,
+                "skip": 0
             });
             totalDocsCount += numFound;
 
@@ -101,10 +104,10 @@ function SolrApp({solrUrl, defaultSolrCore, wsName}){
             const allSolrCores = await getCoresSet();
             for (let solrCore of allSolrCores) {
                 let {response:{numFound}} = await makeSolrQuery({
-                	"queryString": queryString, 
-                	"coreName": solrCore,
-            		"limit": 0,
-            		"skip": 0
+                    "queryString": queryString,
+                    "coreName": solrCore,
+                    "limit": 0,
+                    "skip": 0
                 });
                 totalDocsCount += numFound; 
             }
@@ -114,42 +117,43 @@ function SolrApp({solrUrl, defaultSolrCore, wsName}){
         getTotalDocsCountByWorkflows: async function() {
             const queryString = "-(entityId_sm:[* TO *]) && workflowId_s:[* TO *]";
             const {response:{numFound}} = await makeSolrQuery({
-            	"queryString": queryString,
-            	"limit": 0,
-            	"skip": 0
+                "queryString": queryString,
+                "limit": 0,
+                "skip": 0
             });
 
             return numFound;
         },
         getDocsVersions: async function({entityId, coreName, limit, skip}) {
-        	if (!entityId) {
-        		throw new Error("entityId is not defined");
-        	} else if (!limit) {
-        		throw new Error("limit is not defined");
-        	} else if (!skip && skip !== 0) {
-        		throw new Error("skip is not defined");
-        	}
+            if (!entityId) {
+                throw new Error("entityId is not defined");
+            } else if (!limit) {
+                throw new Error("limit is not defined");
+            } else if (!skip && skip !== 0) {
+                throw new Error("skip is not defined");
+            }
 
-        	const queryString = `entityId_sm:${entityId}`;
+            const queryString = `entityId_sm:${entityId}`;
             const {response:{docs}} = await makeSolrQuery({
-            	"queryString": queryString,
-            	"coreName": coreName, //can be undefined
-            	"fieldList": ["id", "__orientVersion_d"],
-            	"limit": limit,
-            	"skip": skip
+                "queryString": queryString,
+                "coreName": coreName, //can be undefined
+                "fieldList": ["id", "__orientVersion_d"],
+                "limit": limit,
+                "skip": skip,
+                "sort": "__orid_s asc"
             });
 
             const docsVersionsData = [];
             for (let documentData of docs) {
-            	let objectId = documentData.id,
-            		version = documentData.__orientVersion_d;
+                let objectId = documentData.id,
+                    version = documentData.__orientVersion_d;
 
-            	if (objectId && version) {
-            		docsVersionsData.push({
-            			"objectId": objectId,
-            			"version": version
-            		});
-            	}
+                if (objectId && version) {
+                    docsVersionsData.push({
+                        "objectId": objectId,
+                        "version": version
+                    });
+                }
             }
 
             return docsVersionsData;
