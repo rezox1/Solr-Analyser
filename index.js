@@ -578,10 +578,7 @@ app.get("/syncEntity/:entityId", async (req, res) => {
 				if (transactionPercent >= 100) {
 					transactionInProgress = false;
 
-					let entityData = EntitiesMap.get(entityId);
-					//to repeat processing
-					entityData.checked = false;
-					await processEntityById(entityId, EntitiesMap);
+					await processEntityById(entityId, EntitiesMap, true);
 
 					logger.info('Synchronization of "' + entityName + '" is completed');
 				} else {
@@ -700,49 +697,75 @@ app.get("/syncAllEntityDocumentsWithDifference", async (req, res) => {
     }
 });
 
-async function processEntityById(entityId, entitiesMap) {
-    const entityData = entitiesMap.get(entityId);
-    if (entityData && !entityData.checked) {
-        let solrCoreName = entityData.solrCore;
-        try {
-            let [solrCount, orientCount] = await Promise.all([
-                solrApp.getDocsCountByEntityId(entityId, solrCoreName),
-                orientApp.getDocsCountByClassName(entityData.dbname)
-            ]);
+async function processEntityById(entityId, entitiesMap, toProcessAnyway = false, processedEntityIdsArray = []) {
+    if (!entityId) {
+        throw new Error("entityId is not defined");
+    } else if (!entitiesMap) {
+        throw new Error("entitiesMap is not defined");
+    } else if (!(entitiesMap instanceof Map)) {
+        throw new Error("type of entitiesMap is not map");
+    }
 
-            entityData.solrCount = solrCount;
-            entityData.orientCount = orientCount;
-            entityData.hasDifference = false;
-            entityData.delta = solrCount - orientCount;
+    if (processedEntityIdsArray.includes(entityId)) {
+        return;
+    } else {
+        let entityData = entitiesMap.get(entityId);
+        if (entityData) {
+            if (!entityData.checked || toProcessAnyway) {
+                let solrCoreName = entityData.solrCore;
+                try {
+                    let [solrCount, orientCount] = await Promise.all([
+                        solrApp.getDocsCountByEntityId(entityId, solrCoreName),
+                        orientApp.getDocsCountByClassName(entityData.dbname)
+                    ]);
 
-            if (entityData.delta) {
-                entityData.hasDifference = true;
-            } else {
-                let [solrDocsVersionsSum, orientDocsVersionsSum] = await Promise.all([
-                    solrApp.getDocsVersionsSumByEntityId(entityId, solrCoreName),
-                    orientApp.getDocsVersionsSumByClassName(entityData.dbname)
-                ]);
+                    entityData.solrCount = solrCount;
+                    entityData.orientCount = orientCount;
+                    entityData.hasDifference = false;
+                    entityData.delta = solrCount - orientCount;
 
-                if (solrDocsVersionsSum !== orientDocsVersionsSum) {
-                    entityData.hasDifference = true;
+                    if (entityData.delta) {
+                        entityData.hasDifference = true;
+                    } else {
+                        let [solrDocsVersionsSum, orientDocsVersionsSum] = await Promise.all([
+                            solrApp.getDocsVersionsSumByEntityId(entityId, solrCoreName),
+                            orientApp.getDocsVersionsSumByClassName(entityData.dbname)
+                        ]);
+
+                        if (solrDocsVersionsSum !== orientDocsVersionsSum) {
+                            entityData.hasDifference = true;
+                        }
+                    }
+
+                    entityData.checked = true;
+
+                    processedEntityIdsArray.push(entityId);
+                } catch (err) {
+                    if (CONNECTION_ERROR_CODES.includes(err.code)) {
+                        logger.warn("There are connection troubles...");
+
+                        await processEntityById.apply(this, arguments);
+                        return;
+                    } else {
+                        throw err;
+                    }
                 }
             }
-
-            entityData.checked = true;
-        } catch (err) {
-            if (CONNECTION_ERROR_CODES.includes(err.code)) {
-                logger.warn("There are connection troubles...");
-
-                await processEntityById.apply(this, arguments);
-                return;
-            } else {
-                throw err;
-            }
-        }   
+        } else {
+            // do nothing, entity does not exist
+        }
     }
 }
 
 async function processWorkflowById(workflowId, workflowsMap) {
+    if (!workflowId) {
+        throw new Error("workflowId is not defined");
+    } else if (!workflowsMap) {
+        throw new Error("workflowsMap is not defined");
+    } else if (!(workflowsMap instanceof Map)) {
+        throw new Error("type of workflowsMap is not Map");
+    }
+
     const workflowData = workflowsMap.get(workflowId);
     if (workflowData && !workflowData.checked) {
         let solrCount = 0, orientCount = 0;
@@ -791,9 +814,8 @@ async function doEntityFullCheck(entityId, entityData) {
 
     logger.info("Start full check of " + entityData.umlName);
 
-    entityData.checked = false;
     //refresh data about solr and orient documents count
-    await processEntityById(entityId, EntitiesMap);
+    await processEntityById(entityId, EntitiesMap, true);
 
     let {solrCount, orientCount} = entityData;
 
@@ -905,9 +927,7 @@ async function syncAllWrongEntityDocuments(entityId) {
 
             logger.info('Unnecessary documents was deleted from solr');
 
-            //to repeat processing
-            entityData.checked = false;
-            await processEntityById(entityId, EntitiesMap);
+            await processEntityById(entityId, EntitiesMap, true);
         }
     }
 
@@ -926,10 +946,7 @@ async function syncAllWrongEntityDocuments(entityId) {
                 if (transactionPercent >= 100) {
                     transactionInProgress = false;
 
-                    let entityData = EntitiesMap.get(entityId);
-                    //to repeat processing
-                    entityData.checked = false;
-                    await processEntityById(entityId, EntitiesMap);
+                    await processEntityById(entityId, EntitiesMap, true);
 
                     logger.info('Synchronization documents of "' + entityName + '" is completed');
                 } else {
@@ -969,6 +986,10 @@ async function syncAllWrongEntityDocuments(entityId) {
 
 async function getTransactionPercent(transactionId) {
     try {
+        if (!transactionId) {
+            throw new Error("transactionId is not defined");
+        }
+
         let {"percent": transactionPercent} = await digitApp.getTransactionData(transactionId);
         return transactionPercent;
     } catch (err) {
