@@ -116,6 +116,8 @@ const CommonWorkflowsInfoMap = new Map();
 //map object for storing common entities information (like total number of objects etc.)
 const CommonEntitiesInfoMap = new Map();
 
+const FullCheckEntitiesMap = new Map();
+
 app.get("/checkAll", async (req, res) => {
     async function processFormElement(element, entitiesMap, linksMap){
         const elementType = element.objectType;
@@ -530,22 +532,6 @@ app.get("/getWorkflowsList", async (req, res) => {
 
 const SET_TIMEOUT_LIMIT = 2147483647;
 
-async function getTransactionPercent(transactionId){
-    try {
-        let {"percent": transactionPercent} = await digitApp.getTransactionData(transactionId);
-        return transactionPercent;
-    } catch (err) {
-        if (CONNECTION_ERROR_CODES.includes(err.code)) {
-            logger.warn("There are connection troubles...");
-
-            transactionPercent = await getTransactionPercent.apply(this, arguments);
-            return transactionPercent;
-        } else {
-            throw err;
-        }
-    }
-}
-
 app.get("/syncEntity/:entityId", async (req, res) => {
     try {
         const entityId = req.params.entityId;
@@ -623,70 +609,12 @@ app.get("/syncAllWrongDocuments/:entityId", async (req, res) => {
             throw new Error("entityId is not defined");
         }
 
-        const {"umlName": entityName} = EntitiesMap.get(entityId);
+        res.sendStatus(200);
 
-        let objectIdsToRecovery = [];
-
-        const fullCheckData = FullCheckEntitiesMap.get(entityId);
-        if (fullCheckData) {
-            objectIdsToRecovery = [...fullCheckData.notExistDocs, ...fullCheckData.differentVersions];
-        } else {
-            res.sendStatus(200);
-        }
-
-        let objectIdsToDelete = [...fullCheckData.existDocs];
-        if (objectIdsToDelete.length > 0) {
-            logger.info('Send request to delete unnecessary documents from solr');
-
-            digitApp.deleteObjects(objectIdsToDelete).then(() => {
-                logger.info('Unnecessary documents was deleted from solr');
-
-                let entityData = EntitiesMap.get(entityId);
-                //to repeat processing
-                entityData.checked = false;
-                processEntityById(entityId, EntitiesMap).catch(err => {
-                    logger.error(err);
-                });
-            }).catch(err => {
-                logger.error(err);
-            });
-        }
-
-        if (objectIdsToRecovery.length > 0) {
-            const transactionId = await digitApp.syncDocuments({
-                "entityId": entityId,
-                "objectIds": objectIdsToRecovery
-            });
-
-            logger.info('Start documents synchronization of "' + entityName + '"');
-            if (!res.headersSent) {
-                res.sendStatus(200);
-            }
-
-            try {
-                let transactionInProgress = true;
-                while (transactionInProgress) {
-                    let transactionPercent = await getTransactionPercent(transactionId);
-                    if (transactionPercent >= 100) {
-                        transactionInProgress = false;
-
-                        let entityData = EntitiesMap.get(entityId);
-                        //to repeat processing
-                        entityData.checked = false;
-                        await processEntityById(entityId, EntitiesMap);
-
-                        logger.info('Synchronization documents of "' + entityName + '" is completed');
-                    } else {
-                        if (transactionPercent > 0) {
-                            logger.info('Current transaction percent for "' + entityName + '" documents is ' + transactionPercent);
-                        }
-
-                        await sleep(10000);
-                    }
-                }
-            } catch (err) {
-                logger.error(err);
-            }
+        try {
+            await syncAllWrongEntityDocuments(entityId);
+        } catch (err) {
+            logger.error(err);
         }
     } catch (err) {
         res.sendStatus(400);
@@ -695,135 +623,23 @@ app.get("/syncAllWrongDocuments/:entityId", async (req, res) => {
     }
 });
 
-const FullCheckEntitiesMap = new Map();
-
 app.get("/startFullCheck/:entityId", async (req, res) => {
-    function* getProcessedCount(totalCount, processingLimit){
-    	let processedCount = 0;
-    	while (processedCount < totalCount) {
-    		yield processedCount;
-
-    		processedCount += processingLimit;
-    	}
-    }
-
     try {
-    	const entityId = req.params.entityId;
+        const entityId = req.params.entityId;
         if (!entityId) {
-        	throw new Error("entityId is not defined");
+            throw new Error("entityId is not defined");
         }
         const entityData = EntitiesMap.get(entityId);
         if (!entityData) {
-        	throw new Error("Unknown entityId: " + entityId);
+            throw new Error("Unknown entityId: " + entityId);
         }
 
-        logger.info("Start full check of " + entityData.umlName);
         res.sendStatus(200);
 
         try {
-        	entityData.checked = false;
-			//refresh data about solr and orient documents count
-			await processEntityById(entityId, EntitiesMap);
-
-        	let {solrCount, orientCount} = entityData;
-
-			const orientDocsMap = new Map();
-			const solrDocsMap = new Map();
-
-			const docsGettingFlows = [];
-	        
-			const SOLR_GETTING_LIMIT = 10000,
-                processedSolrGenerator = getProcessedCount(solrCount, SOLR_GETTING_LIMIT);
-
-	        const solrDocsGettingFlow = async.eachLimit(processedSolrGenerator, 1, async function getSolrDocsVersions(skipCount) {
-                try {
-                    let docsVersionsData = await solrApp.getDocsVersions({
-                        "entityId": entityId,
-                        "coreName": entityData.solrCore,
-                        "limit": SOLR_GETTING_LIMIT,
-                        "skip": skipCount
-                    });
-                    for (let documentData of docsVersionsData) {
-                        solrDocsMap.set(documentData.objectId, documentData.version);
-                    }
-
-                    logger.info(`${solrDocsMap.size} of ${solrCount} solr documents received`);
-                } catch (err) {
-                    if (CONNECTION_ERROR_CODES.includes(err.code)) {
-                        logger.warn("There are connection troubles...");
-
-                        return await getSolrDocsVersions.apply(this, arguments);
-                    } else {
-                        throw err;
-                    }
-                }
-            });
-	        docsGettingFlows.push(solrDocsGettingFlow);
-	        
-	        const ORIENT_GETTING_LIMIT = 10000,
-                processedOrientGenerator = getProcessedCount(orientCount, ORIENT_GETTING_LIMIT);
-
-	        const orientDocsGettingFlow = async.eachLimit(processedOrientGenerator, 1, async function getOrientDocsVersions(skipCount) {
-                try {
-                    let docsVersionsData = await orientApp.getDocsVersions({
-                        "entityClassName": entityData.dbname,
-                        "limit": ORIENT_GETTING_LIMIT,
-                        "skip": skipCount
-                    });
-                    for (let documentData of docsVersionsData) {
-                        orientDocsMap.set(documentData.objectId, documentData.version);
-                    }
-
-                    logger.info(`${orientDocsMap.size} of ${orientCount} orient documents received`);
-                } catch (err) {
-                    if (CONNECTION_ERROR_CODES.includes(err.code)) {
-                        logger.warn("There are connection troubles...");
-
-                        return await getOrientDocsVersions.apply(this, arguments);
-                    } else {
-                        throw err;
-                    }
-                }
-            });
-	        docsGettingFlows.push(orientDocsGettingFlow);
-
-	        await Promise.all(docsGettingFlows);
-	        logger.info("Finished getting docs versions data");
-
-			const notExistDocs = new Set(),
-				existDocs = new Set(),
-				differentVersions = new Set();
-			const fullCheckEntityData = {
-				"notExistDocs": notExistDocs,
-				"existDocs": existDocs,
-				"differentVersions": differentVersions
-			}
-			FullCheckEntitiesMap.set(entityId, fullCheckEntityData);
-
-			let solrDocVersion = 0;
-			for (let [objectId, orientDocVersion] of orientDocsMap) {
-				solrDocVersion = solrDocsMap.get(objectId);
-				if (solrDocVersion) {
-					if (orientDocVersion !== solrDocVersion) {
-						differentVersions.add(objectId);
-					}
-					
-					solrDocsMap.delete(objectId);
-				} else {
-					notExistDocs.add(objectId);
-				}
-				
-				orientDocsMap.delete(objectId);
-			}
-			for (let objectId of solrDocsMap.keys()) {
-				existDocs.add(objectId);
-				
-				solrDocsMap.delete(objectId);
-			}
-	        
-	        logger.info("Full check of entity '" + entityData.umlName + "' is completed");
+            await doEntityFullCheck(entityId, entityData);
         } catch (err) {
-        	logger.error(err);
+            logger.error(err);
         }
     } catch (err) {
         res.sendStatus(400);
@@ -852,6 +668,30 @@ app.get("/getFullCheckData/:entityId", async (req, res) => {
         	});
         } else {
         	res.send({});
+        }
+    } catch (err) {
+        res.sendStatus(400);
+
+        logger.error(err);
+    }
+});
+
+app.get("/syncAllEntityDocumentsWithDifference", async (req, res) => {
+    try {
+        logger.info("Start synchronization of all entity documents with difference");
+
+        res.sendStatus(200);
+
+        try {
+            for (let [entityId, entityData] of EntitiesMap) {
+                if (entityData.hasDifference) {
+                    await syncAllWrongEntityDocuments(entityId);
+                }
+            }
+
+            logger.info("Synchronization of all entity documents with difference is completed");
+        } catch (err) {
+            logger.error(err);
         }
     } catch (err) {
         res.sendStatus(400);
@@ -930,6 +770,218 @@ async function processWorkflowById(workflowId, workflowsMap) {
         }
 
         workflowData.checked = true;
+    }
+}
+
+async function doEntityFullCheck(entityId, entityData) {
+    function* getProcessedCount(totalCount, processingLimit){
+        let processedCount = 0;
+        while (processedCount < totalCount) {
+            yield processedCount;
+
+            processedCount += processingLimit;
+        }
+    }
+
+    if (!entityId) {
+        throw new Error("entityId is not defined");
+    } else if (!entityData) {
+        throw new Error("entityData is not defined");
+    }
+
+    logger.info("Start full check of " + entityData.umlName);
+
+    entityData.checked = false;
+    //refresh data about solr and orient documents count
+    await processEntityById(entityId, EntitiesMap);
+
+    let {solrCount, orientCount} = entityData;
+
+    const orientDocsMap = new Map();
+    const solrDocsMap = new Map();
+
+    const docsGettingFlows = [];
+
+    const SOLR_GETTING_LIMIT = 10000,
+        processedSolrGenerator = getProcessedCount(solrCount, SOLR_GETTING_LIMIT);
+
+    const solrDocsGettingFlow = async.eachLimit(processedSolrGenerator, 1, async function getSolrDocsVersions(skipCount) {
+        try {
+            let docsVersionsData = await solrApp.getDocsVersions({
+                "entityId": entityId,
+                "coreName": entityData.solrCore,
+                "limit": SOLR_GETTING_LIMIT,
+                "skip": skipCount
+            });
+            for (let documentData of docsVersionsData) {
+                solrDocsMap.set(documentData.objectId, documentData.version);
+            }
+
+            logger.info(`${solrDocsMap.size} of ${solrCount} solr documents received`);
+        } catch (err) {
+            if (CONNECTION_ERROR_CODES.includes(err.code)) {
+                logger.warn("There are connection troubles...");
+
+                return await getSolrDocsVersions.apply(this, arguments);
+            } else {
+                throw err;
+            }
+        }
+    });
+    docsGettingFlows.push(solrDocsGettingFlow);
+
+    const ORIENT_GETTING_LIMIT = 10000,
+        processedOrientGenerator = getProcessedCount(orientCount, ORIENT_GETTING_LIMIT);
+
+    const orientDocsGettingFlow = async.eachLimit(processedOrientGenerator, 1, async function getOrientDocsVersions(skipCount) {
+        try {
+            let docsVersionsData = await orientApp.getDocsVersions({
+                "entityClassName": entityData.dbname,
+                "limit": ORIENT_GETTING_LIMIT,
+                "skip": skipCount
+            });
+            for (let documentData of docsVersionsData) {
+                orientDocsMap.set(documentData.objectId, documentData.version);
+            }
+
+            logger.info(`${orientDocsMap.size} of ${orientCount} orient documents received`);
+        } catch (err) {
+            if (CONNECTION_ERROR_CODES.includes(err.code)) {
+                logger.warn("There are connection troubles...");
+
+                return await getOrientDocsVersions.apply(this, arguments);
+            } else {
+                throw err;
+            }
+        }
+    });
+    docsGettingFlows.push(orientDocsGettingFlow);
+
+    await Promise.all(docsGettingFlows);
+    logger.info("Finished getting docs versions data");
+
+    const notExistDocs = new Set(),
+        existDocs = new Set(),
+        differentVersions = new Set();
+    const fullCheckEntityData = {
+        "notExistDocs": notExistDocs,
+        "existDocs": existDocs,
+        "differentVersions": differentVersions
+    }
+    FullCheckEntitiesMap.set(entityId, fullCheckEntityData);
+
+    let solrDocVersion = 0;
+    for (let [objectId, orientDocVersion] of orientDocsMap) {
+        solrDocVersion = solrDocsMap.get(objectId);
+        if (solrDocVersion) {
+            if (orientDocVersion !== solrDocVersion) {
+                differentVersions.add(objectId);
+            }
+
+            solrDocsMap.delete(objectId);
+        } else {
+            notExistDocs.add(objectId);
+        }
+
+        orientDocsMap.delete(objectId);
+    }
+    for (let objectId of solrDocsMap.keys()) {
+        existDocs.add(objectId);
+
+        solrDocsMap.delete(objectId);
+    }
+
+    logger.info("Full check of entity '" + entityData.umlName + "' is completed");
+
+    return fullCheckEntityData;
+}
+
+async function syncAllWrongEntityDocuments(entityId) {
+    async function performObjectIdsToDelete() {
+        if (objectIdsToDelete.length > 0) {
+            logger.info('Send request to delete unnecessary documents from solr');
+
+            await digitApp.deleteObjects(objectIdsToDelete);
+
+            logger.info('Unnecessary documents was deleted from solr');
+
+            //to repeat processing
+            entityData.checked = false;
+            await processEntityById(entityId, EntitiesMap);
+        }
+    }
+
+    async function performObjectIdsToRecovery() {
+        if (objectIdsToRecovery.length > 0) {
+            let transactionId = await digitApp.syncDocuments({
+                "entityId": entityId,
+                "objectIds": objectIdsToRecovery
+            });
+
+            logger.info('Start documents synchronization of "' + entityName + '"');
+
+            let transactionInProgress = true;
+            while (transactionInProgress) {
+                let transactionPercent = await getTransactionPercent(transactionId);
+                if (transactionPercent >= 100) {
+                    transactionInProgress = false;
+
+                    let entityData = EntitiesMap.get(entityId);
+                    //to repeat processing
+                    entityData.checked = false;
+                    await processEntityById(entityId, EntitiesMap);
+
+                    logger.info('Synchronization documents of "' + entityName + '" is completed');
+                } else {
+                    if (transactionPercent > 0) {
+                        logger.info('Current transaction percent for "' + entityName + '" documents is ' + transactionPercent);
+                    }
+
+                    await sleep(10000);
+                }
+            }
+        }
+    }
+
+    if (!entityId) {
+        throw new Error("entityId is not defined");
+    }
+
+    const entityData = EntitiesMap.get(entityId);
+    const entityName = entityData.umlName;
+
+    let objectIdsToRecovery = [];
+
+    let fullCheckData = FullCheckEntitiesMap.get(entityId);
+    if (!fullCheckData) {
+        fullCheckData = await doEntityFullCheck(entityId, entityData);
+    }
+
+    let objectIdsToRecovery = [...fullCheckData.notExistDocs, ...fullCheckData.differentVersions];
+
+    let objectIdsToDelete = [...fullCheckData.existDocs];
+
+    await Promise.all([
+        performObjectIdsToDelete(),
+        performObjectIdsToRecovery()
+    ]);
+
+    await doEntityFullCheck(entityId, entityData);
+}
+
+async function getTransactionPercent(transactionId) {
+    try {
+        let {"percent": transactionPercent} = await digitApp.getTransactionData(transactionId);
+        return transactionPercent;
+    } catch (err) {
+        if (CONNECTION_ERROR_CODES.includes(err.code)) {
+            logger.warn("There are connection troubles...");
+
+            transactionPercent = await getTransactionPercent.apply(this, arguments);
+            return transactionPercent;
+        } else {
+            throw err;
+        }
     }
 }
 
